@@ -11,7 +11,7 @@ connection:
   collection: "usertable"
   readPreference: "primary"             # primary | primaryPreferred | secondary | secondaryPreferred | nearest
   readConcern: "local"                  # local | majority | linearizable | available
-  writeConcern: "majority"              # majority | w:1 | w:0
+  writeConcern: "w:1"                       # majority | w:1 | w:0
   connectionPoolSize: 100
   timeoutMs: 30000
 
@@ -39,9 +39,9 @@ workload:
 documentShape:
   fieldCount: 10
   fieldSize: 100                        # target bytes per string field
-  nestedDocs: false
+  nestedDocs: true
   nestedDepth: 2                        # only when nestedDocs: true
-  arrays: false
+  arrays: true
   arraySize: 5                          # only when arrays: true
   useRealisticData: true                # true = faker data | false = random strings
 
@@ -72,6 +72,7 @@ execution:
 phases:
   preload:
     enabled: true
+    skipIfExists: true 
     documentCount: 100000               # docs to insert before benchmark starts
     threads: 20
 

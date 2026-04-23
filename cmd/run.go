@@ -28,6 +28,7 @@ func init() {
 	runCmd.Flags().String("duration", "", "Benchmark duration e.g. 5m, 1h (overrides config)")
 	runCmd.Flags().Int64("ops", 0, "Total operations to run (overrides config)")
 	runCmd.Flags().StringSlice("tags", nil, "Tags to label this run e.g. baseline,after-index")
+	runCmd.Flags().Bool("skip-preload", false, "Skip preload and use existing collection data")
 }
 
 func runBenchmark(cmd *cobra.Command, args []string) error {
@@ -54,7 +55,9 @@ func runBenchmark(cmd *cobra.Command, args []string) error {
 	}
 	defer log.Sync()
 
-	orch := orchestrator.New(cfg, log)
+	skipPreload, _ := cmd.Flags().GetBool("skip-preload")
+
+	orch := orchestrator.New(cfg, log, skipPreload)
 	_, err = orch.Run(context.Background())
 	return err
 }

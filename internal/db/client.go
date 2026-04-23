@@ -14,9 +14,43 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/writeconcern"
 )
 
-// NewClient creates, verifies, and returns a MongoDB client configured
-// for benchmarking (retries disabled, pool pre-sized).
-func NewClient(ctx context.Context, cfg *config.ConnectionConfig) (*mongo.Client, error) {
+// NewBenchmarkClient creates a client optimised for accurate benchmarking.
+// Retries are disabled so every error is real and every latency measurement
+// reflects exactly one attempt.
+func NewBenchmarkClient(ctx context.Context, cfg *config.ConnectionConfig) (*mongo.Client, error) {
+	opts, err := baseOptions(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	opts.
+		SetMaxPoolSize(cfg.ConnectionPoolSize).
+		SetRetryReads(false).
+		SetRetryWrites(false)
+
+	return connect(ctx, opts, cfg)
+}
+
+// NewPreloadClient creates a client optimised for bulk data loading.
+// Retries are enabled so transient connection hiccups during long
+// bulk insert operations don't abort the entire preload.
+// Pool is kept small — preload uses its own goroutines, not benchmark threads.
+func NewPreloadClient(ctx context.Context, cfg *config.ConnectionConfig) (*mongo.Client, error) {
+	opts, err := baseOptions(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	opts.
+		SetMaxPoolSize(50). // preload never needs more than its thread count
+		SetRetryReads(true).
+		SetRetryWrites(true)
+
+	return connect(ctx, opts, cfg)
+}
+
+// baseOptions builds the common options shared by both client types.
+func baseOptions(cfg *config.ConnectionConfig) (*options.ClientOptions, error) {
 	rp, err := parseReadPreference(cfg.ReadPreference)
 	if err != nil {
 		return nil, err
@@ -29,26 +63,20 @@ func NewClient(ctx context.Context, cfg *config.ConnectionConfig) (*mongo.Client
 
 	serverSelectionTimeout := time.Duration(cfg.TimeoutMs) * time.Millisecond
 
-	// MinPoolSize = threads ensures all connections are established
-	// before the benchmark starts, avoiding TLS+auth overhead mid-run.
-	// Cap at MaxPoolSize to avoid invalid config.
-	minPool := cfg.ConnectionPoolSize
-	if minPool > cfg.ConnectionPoolSize {
-		minPool = cfg.ConnectionPoolSize
-	}
-
-	opts := options.Client().
+	return options.Client().
 		ApplyURI(cfg.URI).
 		SetReadPreference(rp).
 		SetWriteConcern(wc).
 		SetReadConcern(rc).
-		SetMinPoolSize(minPool).
-		SetMaxPoolSize(cfg.ConnectionPoolSize).
-		SetServerSelectionTimeout(serverSelectionTimeout).
-		// Disable retries for accurate benchmarking — retries silently
-		// double latency on transient errors and mask real error rates.
-		SetRetryReads(false).
-		SetRetryWrites(false)
+		SetServerSelectionTimeout(serverSelectionTimeout), nil
+}
+
+// connect dials MongoDB, pings it, and returns the client.
+func connect(ctx context.Context, opts *options.ClientOptions, cfg *config.ConnectionConfig) (*mongo.Client, error) {
+	rp, err := parseReadPreference(cfg.ReadPreference)
+	if err != nil {
+		return nil, err
+	}
 
 	client, err := mongo.Connect(ctx, opts)
 	if err != nil {
@@ -66,18 +94,26 @@ func NewClient(ctx context.Context, cfg *config.ConnectionConfig) (*mongo.Client
 	return client, nil
 }
 
-// WarmUpPool explicitly opens n connections concurrently so that TLS
-// handshake and auth are fully complete before the benchmark clock starts.
+// WarmUpPool opens n connections in small batches to avoid overwhelming
+// the server with simultaneous TLS handshakes.
 func WarmUpPool(ctx context.Context, client *mongo.Client, n int) {
+	const batchSize = 10
 	var wg sync.WaitGroup
-	for i := 0; i < n; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			_ = client.Ping(ctx, nil)
-		}()
+
+	for i := 0; i < n; i += batchSize {
+		end := i + batchSize
+		if end > n {
+			end = n
+		}
+		for j := i; j < end; j++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				_ = client.Ping(ctx, nil)
+			}()
+		}
+		wg.Wait()
 	}
-	wg.Wait()
 }
 
 func parseReadPreference(rp string) (*readpref.ReadPref, error) {
@@ -97,9 +133,6 @@ func parseReadPreference(rp string) (*readpref.ReadPref, error) {
 	}
 }
 
-// parseWriteConcern uses the non-deprecated v1.12+ API.
-// The old writeconcern.New() applied unexpected journaling defaults
-// in v1.13.x that added significant write latency.
 func parseWriteConcern(wc string) (*writeconcern.WriteConcern, error) {
 	switch wc {
 	case "majority", "":

@@ -5,6 +5,7 @@ import (
 	"math/rand"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/brianvoe/gofakeit/v6"
 	"github.com/yourusername/mongo-ycsb/internal/config"
@@ -12,17 +13,16 @@ import (
 )
 
 // Generator creates documents and manages the key space for benchmark ops.
-// Keys follow the pattern "user0", "user1", ..., "userN" — matching
-// standard YCSB behaviour and making range scans predictable.
+// It is safe for concurrent use — counters use atomics, and all
+// randomness is pushed to per-worker RNG/Faker instances.
 type Generator struct {
 	cfg          *config.DocumentShapeConfig
-	insertedDocs atomic.Int64 // docs known to exist (preload + inserts)
-	nextKey      atomic.Int64 // monotonically increasing insert key
+	insertedDocs atomic.Int64
+	nextKey      atomic.Int64
 }
 
-// New creates a Generator. startingCount is the number of docs already
-// in the collection (e.g. inserted during preload) so reads/updates
-// immediately target valid keys.
+// New creates a Generator. startingCount reflects docs already in the
+// collection (e.g. after preload) so reads/updates target valid keys immediately.
 func New(cfg *config.DocumentShapeConfig, startingCount int64) *Generator {
 	g := &Generator{cfg: cfg}
 	g.insertedDocs.Store(startingCount)
@@ -38,13 +38,14 @@ func (g *Generator) NextInsertKey() string {
 }
 
 // RandomExistingKey picks a uniform-random key from the known key space.
-// Returns "" when no documents exist yet (e.g. before preload).
-func (g *Generator) RandomExistingKey() string {
+// Accepts a caller-supplied *rand.Rand to avoid global mutex contention.
+// Returns "" when no documents exist yet.
+func (g *Generator) RandomExistingKey(rng *rand.Rand) string {
 	count := g.insertedDocs.Load()
 	if count == 0 {
 		return ""
 	}
-	return fmt.Sprintf("user%d", rand.Int63n(count))
+	return fmt.Sprintf("user%d", rng.Int63n(count))
 }
 
 // InsertedCount returns the current number of known inserted documents.
@@ -53,17 +54,18 @@ func (g *Generator) InsertedCount() int64 {
 }
 
 // BuildDocument generates a full document for the given key.
-func (g *Generator) BuildDocument(key string) bson.M {
+// Accepts caller-supplied rng and faker to avoid shared-mutex contention.
+func (g *Generator) BuildDocument(key string, rng *rand.Rand, faker *gofakeit.Faker) bson.M {
 	doc := bson.M{"_id": key}
 
 	for i := 0; i < g.cfg.FieldCount; i++ {
-		doc[fmt.Sprintf("field%d", i)] = g.generateValue(i)
+		doc[fmt.Sprintf("field%d", i)] = g.generateValue(i, rng, faker)
 	}
 
 	if g.cfg.NestedDocs {
 		nested := bson.M{}
 		for i := 0; i < g.cfg.FieldCount; i++ {
-			nested[fmt.Sprintf("nfield%d", i)] = g.generateValue(i)
+			nested[fmt.Sprintf("nfield%d", i)] = g.generateValue(i, rng, faker)
 		}
 		doc["nested"] = nested
 	}
@@ -71,7 +73,7 @@ func (g *Generator) BuildDocument(key string) bson.M {
 	if g.cfg.Arrays {
 		arr := make([]interface{}, g.cfg.ArraySize)
 		for i := range arr {
-			arr[i] = g.generateValue(i)
+			arr[i] = g.generateValue(i, rng, faker)
 		}
 		doc["tags"] = arr
 	}
@@ -80,42 +82,53 @@ func (g *Generator) BuildDocument(key string) bson.M {
 }
 
 // BuildUpdateDoc generates a $set targeting one random field.
-func (g *Generator) BuildUpdateDoc() bson.M {
-	idx := rand.Intn(g.cfg.FieldCount)
+func (g *Generator) BuildUpdateDoc(rng *rand.Rand, faker *gofakeit.Faker) bson.M {
+	idx := rng.Intn(g.cfg.FieldCount)
 	return bson.M{
 		"$set": bson.M{
-			fmt.Sprintf("field%d", idx): g.generateValue(idx),
+			fmt.Sprintf("field%d", idx): g.generateValue(idx, rng, faker),
 		},
 	}
 }
 
-// generateValue rotates through realistic data types based on field index.
-func (g *Generator) generateValue(fieldIndex int) interface{} {
+func (g *Generator) generateValue(fieldIndex int, rng *rand.Rand, faker *gofakeit.Faker) interface{} {
 	if !g.cfg.UseRealisticData {
-		return randomString(g.cfg.FieldSize)
+		return randomString(g.cfg.FieldSize, rng)
 	}
 	switch fieldIndex % 6 {
 	case 0:
-		return gofakeit.Name()
+		return faker.Name()
 	case 1:
-		return gofakeit.Email()
+		return faker.Email()
 	case 2:
-		return gofakeit.City() + ", " + gofakeit.CountryAbr()
+		return faker.City() + ", " + faker.CountryAbr()
 	case 3:
-		return gofakeit.Date().Format("2006-01-02T15:04:05Z")
+		return faker.Date().Format(time.RFC3339)
 	case 4:
-		return gofakeit.Price(1, 10000)
+		return faker.Price(1, 10000)
 	default:
-		return gofakeit.Sentence(8)
+		return faker.Sentence(8)
 	}
 }
 
-func randomString(size int) string {
+func randomString(size int, rng *rand.Rand) string {
 	const chars = "abcdefghijklmnopqrstuvwxyz0123456789"
 	var sb strings.Builder
 	sb.Grow(size)
 	for i := 0; i < size; i++ {
-		sb.WriteByte(chars[rand.Intn(len(chars))])
+		sb.WriteByte(chars[rng.Intn(len(chars))])
 	}
 	return sb.String()
+}
+
+// NewWorkerRNG creates a seeded, goroutine-local *rand.Rand.
+// Each worker gets its own instance to avoid the global rand mutex.
+func NewWorkerRNG() *rand.Rand {
+	return rand.New(rand.NewSource(time.Now().UnixNano()))
+}
+
+// NewWorkerFaker creates a goroutine-local *gofakeit.Faker.
+// Each worker gets its own instance to avoid gofakeit's internal mutex.
+func NewWorkerFaker() *gofakeit.Faker {
+	return gofakeit.New(time.Now().UnixNano())
 }

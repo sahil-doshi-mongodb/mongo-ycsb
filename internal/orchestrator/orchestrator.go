@@ -19,56 +19,103 @@ import (
 
 // Orchestrator runs all benchmark phases in sequence.
 type Orchestrator struct {
-	cfg   *config.Config
-	log   *zap.Logger
-	runID string
+	cfg         *config.Config
+	log         *zap.Logger
+	runID       string
+	skipPreload bool
 }
 
 // New creates an Orchestrator with a fresh run ID.
-func New(cfg *config.Config, log *zap.Logger) *Orchestrator {
-	return &Orchestrator{cfg: cfg, log: log, runID: uuid.New().String()}
+func New(cfg *config.Config, log *zap.Logger, skipPreload bool) *Orchestrator {
+	return &Orchestrator{
+		cfg:         cfg,
+		log:         log,
+		runID:       uuid.New().String(),
+		skipPreload: skipPreload,
+	}
 }
 
-// Run executes: connect → indexes → preload → warmup → benchmark → summary.
+// Run executes: connect → preload → indexes → warmup → benchmark → summary.
 func (o *Orchestrator) Run(ctx context.Context) (*models.RunResult, error) {
 	fmt.Printf("\n🔑 Run ID : %s\n\n", o.runID)
 	o.log.Info("benchmark starting", zap.String("run_id", o.runID))
 
-	// ── 1. Connect ──────────────────────────────────────────────────────────
-	client, err := db.NewClient(ctx, &o.cfg.Connection)
-	if err != nil {
-		return nil, fmt.Errorf("connection failed: %w", err)
-	}
-	defer client.Disconnect(ctx)
-	fmt.Printf("✅ Connected to MongoDB\n")
+	// ── 1. Preload phase — uses its own client with retries enabled ──────────
+	// Kept separate from the benchmark client so transient connection hiccups
+	// during long bulk inserts don't abort the entire preload, while the
+	// benchmark client stays retry-free for accurate latency measurement.
+	gen := datagen.New(&o.cfg.DocumentShape, 0)
 
-	coll := client.
+	if o.skipPreload {
+		fmt.Printf("⏭️  Skipping preload — using existing collection data\n")
+		preloadClient, err := db.NewPreloadClient(ctx, &o.cfg.Connection)
+		if err != nil {
+			return nil, fmt.Errorf("preload connection failed: %w", err)
+		}
+		coll := preloadClient.
+			Database(o.cfg.Connection.Database).
+			Collection(o.cfg.Connection.Collection)
+		count, err := coll.EstimatedDocumentCount(ctx)
+		_ = preloadClient.Disconnect(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to count existing documents: %w", err)
+		}
+		gen = datagen.New(&o.cfg.DocumentShape, count)
+		fmt.Printf("   ↳ Found %d existing documents\n\n", count)
+	} else {
+		preloadClient, err := db.NewPreloadClient(ctx, &o.cfg.Connection)
+		if err != nil {
+			return nil, fmt.Errorf("preload connection failed: %w", err)
+		}
+		preloadColl := preloadClient.
+			Database(o.cfg.Connection.Database).
+			Collection(o.cfg.Connection.Collection)
+
+		ldr := loader.New(&o.cfg.Phases, preloadColl, gen, o.log)
+
+		// Preload first — Drop() inside Preload() would wipe indexes
+		// if we created them beforehand.
+		if err := ldr.Preload(ctx); err != nil {
+			_ = preloadClient.Disconnect(ctx)
+			return nil, err
+		}
+
+		// Create indexes after preload so they survive the Drop().
+		fmt.Printf("🔧 Creating indexes...\n")
+		if err := ldr.CreateIndexes(ctx, o.cfg.Indexes); err != nil {
+			_ = preloadClient.Disconnect(ctx)
+			return nil, err
+		}
+
+		_ = preloadClient.Disconnect(ctx)
+		gen = datagen.New(&o.cfg.DocumentShape, o.cfg.Phases.Preload.DocumentCount)
+		fmt.Printf("✅ Indexes ready\n\n")
+	}
+
+	// ── 2. Benchmark client — retries disabled for accurate measurement ──────
+	fmt.Printf("🔌 Pre-warming %d benchmark connections...\n", o.cfg.Execution.Threads)
+	benchClient, err := db.NewBenchmarkClient(ctx, &o.cfg.Connection)
+	if err != nil {
+		return nil, fmt.Errorf("benchmark connection failed: %w", err)
+	}
+	defer benchClient.Disconnect(ctx)
+
+	// Open connections in controlled batches before the clock starts.
+	db.WarmUpPool(ctx, benchClient, o.cfg.Execution.Threads)
+	fmt.Printf("✅ Connected to MongoDB\n\n")
+
+	benchColl := benchClient.
 		Database(o.cfg.Connection.Database).
 		Collection(o.cfg.Connection.Collection)
 
-	// ── 2. Shared components ────────────────────────────────────────────────
-	gen := datagen.New(&o.cfg.DocumentShape, 0)
-
+	// ── 3. Shared benchmark components ──────────────────────────────────────
 	selector, err := workloads.NewSelector(&o.cfg.Workload)
 	if err != nil {
 		return nil, err
 	}
-
 	recorder := metrics.NewSimpleRecorder()
-	ldr := loader.New(&o.cfg.Phases, coll, gen, o.log)
 
-	// ── 3. Setup: create indexes ────────────────────────────────────────────
-	fmt.Printf("🔧 Creating indexes...\n")
-	if err := ldr.CreateIndexes(ctx, o.cfg.Indexes); err != nil {
-		return nil, err
-	}
-
-	// ── 4. Preload ──────────────────────────────────────────────────────────
-	if err := ldr.Preload(ctx); err != nil {
-		return nil, err
-	}
-
-	// ── 5. Warmup ───────────────────────────────────────────────────────────
+	// ── 4. Warmup ───────────────────────────────────────────────────────────
 	if o.cfg.Phases.Warmup.Enabled {
 		warmupDur, err := time.ParseDuration(o.cfg.Phases.Warmup.Duration)
 		if err != nil {
@@ -77,14 +124,13 @@ func (o *Orchestrator) Run(ctx context.Context) (*models.RunResult, error) {
 
 		fmt.Printf("🔥 Warming up for %s (metrics discarded)...\n\n", warmupDur)
 
-		// Use a copy of the execution config forced into time mode for warmup
 		warmupExecCfg := o.cfg.Execution
 		warmupExecCfg.Mode = config.ModeTime
 		warmupExecCfg.Duration = o.cfg.Phases.Warmup.Duration
 
 		warmupCtx, cancel := context.WithTimeout(ctx, warmupDur)
 		warmupPool := worker.NewPool(
-			&warmupExecCfg, coll, selector, gen,
+			&warmupExecCfg, benchColl, selector, gen,
 			metrics.NewSimpleRecorder(), // discarded
 			o.log,
 		)
@@ -92,18 +138,18 @@ func (o *Orchestrator) Run(ctx context.Context) (*models.RunResult, error) {
 		cancel()
 	}
 
-	// ── 6. Benchmark ────────────────────────────────────────────────────────
+	// ── 5. Benchmark ────────────────────────────────────────────────────────
 	fmt.Printf("🚀 Benchmark running — workload %s | %d threads | mode: %s\n",
 		o.cfg.Workload.Type, o.cfg.Execution.Threads, o.cfg.Execution.Mode)
 
 	start := time.Now()
-	pool := worker.NewPool(&o.cfg.Execution, coll, selector, gen, recorder, o.log)
+	pool := worker.NewPool(&o.cfg.Execution, benchColl, selector, gen, recorder, o.log)
 	if err := pool.Run(ctx); err != nil {
 		return nil, fmt.Errorf("benchmark failed: %w", err)
 	}
 	elapsed := time.Since(start)
 
-	// ── 7. Build and print result ───────────────────────────────────────────
+	// ── 6. Build and print result ───────────────────────────────────────────
 	snap := recorder.Snapshot()
 	result := &models.RunResult{
 		RunID:     o.runID,
@@ -134,7 +180,6 @@ func buildOpMetrics(snap metrics.Snapshot) map[string]models.OpMetric {
 			Count:  v.Count,
 			Errors: v.Errors,
 			MeanMs: mean,
-			// P50/P95/P99/P999 populated in Step 3
 		}
 	}
 	return out
