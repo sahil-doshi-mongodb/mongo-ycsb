@@ -3,7 +3,7 @@
 # ============================================================
 
 connection:
-  uri: "mongodb://localhost:27017"
+  uri: "mongodb+srv://mongoadmin:OI4rBsvCtfUekLKg@consultnew.3eano.mongodb.net/"
   database: "ycsb"
   collection: "usertable"
   readPreference: "primary"
@@ -76,16 +76,44 @@ phases:
 
 schedule:
   enabled: false
+
+  # Standard 5-field cron expression — when to trigger each run.
+  # Examples:
+  #   "* * * * *"       every minute
+  #   "*/30 * * * *"    every 30 minutes
+  #   "0 2 * * *"       every day at 02:00
+  #   "0 */6 * * *"     every 6 hours
   cron: "0 2 * * *"
-  startAt: ""
-  stopAt: ""
-  runFor: ""
-  maxRuns: 0
+
+  # Bounds — controls when the scheduler STOPS.
+  # Set bounds.type to exactly ONE of: unlimited | runFor | maxRuns | timeWindow
+  # Only populate the fields for the type you choose — leave all others empty/zero.
+  bounds:
+    # unlimited  → runs forever until you press Ctrl+C
+    # runFor     → stops after a total wall-clock duration from start
+    # maxRuns    → stops after N completed runs
+    # timeWindow → only fires between startAt and stopAt
+    type: "unlimited"
+
+    # Used when type: runFor
+    # How long to keep firing triggers from the moment the scheduler starts.
+    # e.g. "600s" fires every cron tick for 10 minutes total.
+    runFor: ""
+
+    # Used when type: maxRuns
+    # Stop after exactly this many successfully completed runs.
+    maxRuns: 0
+
+    # Used when type: timeWindow
+    # Both are required. Triggers before startAt are skipped.
+    # Scheduler shuts down when a trigger fires after stopAt.
+    startAt: ""   # RFC3339 e.g. "2026-05-01T00:00:00Z"
+    stopAt:  ""   # RFC3339 e.g. "2026-05-07T23:59:59Z"
 
 results:
   mongodb:
     enabled: true
-    uri: "mongodb://localhost:27017"
+    uri: "mongodb+srv://mongoadmin:OI4rBsvCtfUekLKg@consultnew.3eano.mongodb.net/"
     database: "ycsb_results"
     collection: "runs"
   local:

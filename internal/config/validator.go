@@ -148,24 +148,108 @@ func (c *Config) Validate() []error {
 		}
 	}
 
-	// ── Schedule ────────────────────────────────────────────────────────────
+	// ── Schedule ────────────────────────────────────────────────────────────────
 	if c.Schedule.Enabled {
 		if c.Schedule.Cron == "" {
 			errs = append(errs, fmt.Errorf("schedule.cron is required when schedule.enabled is true"))
 		}
-		if c.Schedule.StartAt != "" {
-			if _, err := c.Schedule.ParseStartAt(); err != nil {
-				errs = append(errs, fmt.Errorf("schedule.startAt must be RFC3339: %w", err))
-			}
+
+		validBoundTypes := map[string]bool{
+			"unlimited": true, "runFor": true, "maxRuns": true, "timeWindow": true,
 		}
-		if c.Schedule.StopAt != "" {
-			if _, err := c.Schedule.ParseStopAt(); err != nil {
-				errs = append(errs, fmt.Errorf("schedule.stopAt must be RFC3339: %w", err))
-			}
-		}
-		if c.Schedule.RunFor != "" {
-			if _, err := c.Schedule.ParseRunFor(); err != nil {
-				errs = append(errs, fmt.Errorf("schedule.runFor is invalid: %w", err))
+		b := c.Schedule.Bounds
+
+		if b.Type == "" {
+			errs = append(errs, fmt.Errorf(
+				"schedule.bounds.type is required when schedule.enabled is true — "+
+					"must be one of: unlimited, runFor, maxRuns, timeWindow",
+			))
+		} else if !validBoundTypes[b.Type] {
+			errs = append(errs, fmt.Errorf(
+				"schedule.bounds.type %q is invalid — must be one of: unlimited, runFor, maxRuns, timeWindow",
+				b.Type,
+			))
+		} else {
+			switch b.Type {
+			case "runFor":
+				if b.RunFor == "" {
+					errs = append(errs, fmt.Errorf(
+						"schedule.bounds.runFor is required when bounds.type is \"runFor\"",
+					))
+				} else if _, err := b.ParseRunFor(); err != nil {
+					errs = append(errs, fmt.Errorf(
+						"schedule.bounds.runFor %q is invalid: %w", b.RunFor, err,
+					))
+				}
+				// Warn about unused fields
+				if b.MaxRuns != 0 {
+					errs = append(errs, fmt.Errorf(
+						"schedule.bounds.maxRuns is set but bounds.type is \"runFor\" — remove it to avoid confusion",
+					))
+				}
+				if b.StartAt != "" || b.StopAt != "" {
+					errs = append(errs, fmt.Errorf(
+						"schedule.bounds.startAt/stopAt are set but bounds.type is \"runFor\" — remove them to avoid confusion",
+					))
+				}
+
+			case "maxRuns":
+				if b.MaxRuns <= 0 {
+					errs = append(errs, fmt.Errorf(
+						"schedule.bounds.maxRuns must be > 0 when bounds.type is \"maxRuns\"",
+					))
+				}
+				if b.RunFor != "" {
+					errs = append(errs, fmt.Errorf(
+						"schedule.bounds.runFor is set but bounds.type is \"maxRuns\" — remove it to avoid confusion",
+					))
+				}
+				if b.StartAt != "" || b.StopAt != "" {
+					errs = append(errs, fmt.Errorf(
+						"schedule.bounds.startAt/stopAt are set but bounds.type is \"maxRuns\" — remove them to avoid confusion",
+					))
+				}
+
+			case "timeWindow":
+				if b.StartAt == "" {
+					errs = append(errs, fmt.Errorf(
+						"schedule.bounds.startAt is required when bounds.type is \"timeWindow\"",
+					))
+				} else if startAt, err := b.ParseStartAt(); err != nil {
+					errs = append(errs, fmt.Errorf(
+						"schedule.bounds.startAt %q is invalid RFC3339: %w", b.StartAt, err,
+					))
+				} else if b.StopAt == "" {
+					errs = append(errs, fmt.Errorf(
+						"schedule.bounds.stopAt is required when bounds.type is \"timeWindow\"",
+					))
+				} else if stopAt, err := b.ParseStopAt(); err != nil {
+					errs = append(errs, fmt.Errorf(
+						"schedule.bounds.stopAt %q is invalid RFC3339: %w", b.StopAt, err,
+					))
+				} else if !stopAt.After(startAt) {
+					errs = append(errs, fmt.Errorf(
+						"schedule.bounds.stopAt must be after startAt",
+					))
+				}
+				if b.RunFor != "" {
+					errs = append(errs, fmt.Errorf(
+						"schedule.bounds.runFor is set but bounds.type is \"timeWindow\" — remove it to avoid confusion",
+					))
+				}
+				if b.MaxRuns != 0 {
+					errs = append(errs, fmt.Errorf(
+						"schedule.bounds.maxRuns is set but bounds.type is \"timeWindow\" — remove it to avoid confusion",
+					))
+				}
+
+			case "unlimited":
+				// No additional fields needed — any set fields are warnings
+				if b.RunFor != "" || b.MaxRuns != 0 || b.StartAt != "" || b.StopAt != "" {
+					errs = append(errs, fmt.Errorf(
+						"schedule.bounds has extra fields set but bounds.type is \"unlimited\" — remove them to avoid confusion",
+					))
+				}
 			}
 		}
 	}

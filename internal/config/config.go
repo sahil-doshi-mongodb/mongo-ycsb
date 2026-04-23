@@ -180,34 +180,57 @@ type WarmupConfig struct {
 
 // ─── Scheduling ───────────────────────────────────────────────────────────────
 
+// ─── Scheduling ───────────────────────────────────────────────────────────────
+
 type ScheduleConfig struct {
-	Enabled bool   `mapstructure:"enabled"`
-	Cron    string `mapstructure:"cron"`
+	Enabled bool         `mapstructure:"enabled"`
+	Cron    string       `mapstructure:"cron"` // standard 5-field cron expression
+	Bounds  BoundsConfig `mapstructure:"bounds"`
+}
+
+// BoundsConfig defines when the scheduler stops.
+// Set bounds.type to exactly ONE of: unlimited | runFor | maxRuns | timeWindow
+type BoundsConfig struct {
+	// Type controls which bound is active. Only one is used at a time.
+	//   unlimited  — runs forever until manually stopped (Ctrl+C)
+	//   runFor     — stops after a total wall-clock duration from start
+	//   maxRuns    — stops after N completed runs
+	//   timeWindow — only fires between startAt and stopAt timestamps
+	Type string `mapstructure:"type"`
+
+	// Used when type: runFor — e.g. "600s", "2h", "30m"
+	RunFor string `mapstructure:"runFor"`
+
+	// Used when type: maxRuns — must be > 0
+	MaxRuns int `mapstructure:"maxRuns"`
+
+	// Used when type: timeWindow — both must be valid RFC3339 timestamps
 	StartAt string `mapstructure:"startAt"`
 	StopAt  string `mapstructure:"stopAt"`
-	RunFor  string `mapstructure:"runFor"`
-	MaxRuns int    `mapstructure:"maxRuns"`
 }
 
-func (s *ScheduleConfig) ParseStartAt() (time.Time, error) {
-	if s.StartAt == "" {
-		return time.Time{}, nil
-	}
-	return time.Parse(time.RFC3339, s.StartAt)
-}
-
-func (s *ScheduleConfig) ParseStopAt() (time.Time, error) {
-	if s.StopAt == "" {
-		return time.Time{}, nil
-	}
-	return time.Parse(time.RFC3339, s.StopAt)
-}
-
-func (s *ScheduleConfig) ParseRunFor() (time.Duration, error) {
-	if s.RunFor == "" {
+// ParseRunFor parses the RunFor field as a time.Duration.
+func (b *BoundsConfig) ParseRunFor() (time.Duration, error) {
+	if b.RunFor == "" {
 		return 0, nil
 	}
-	return time.ParseDuration(s.RunFor)
+	return time.ParseDuration(b.RunFor)
+}
+
+// ParseStartAt parses StartAt as time.Time.
+func (b *BoundsConfig) ParseStartAt() (time.Time, error) {
+	if b.StartAt == "" {
+		return time.Time{}, nil
+	}
+	return time.Parse(time.RFC3339, b.StartAt)
+}
+
+// ParseStopAt parses StopAt as time.Time.
+func (b *BoundsConfig) ParseStopAt() (time.Time, error) {
+	if b.StopAt == "" {
+		return time.Time{}, nil
+	}
+	return time.Parse(time.RFC3339, b.StopAt)
 }
 
 // ─── Results ──────────────────────────────────────────────────────────────────

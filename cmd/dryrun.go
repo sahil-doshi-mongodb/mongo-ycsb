@@ -3,13 +3,15 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"time"
 
+	"github.com/robfig/cron/v3"
 	"github.com/spf13/cobra"
 	"github.com/yourusername/mongo-ycsb/internal/config"
 )
 
-// skipPreloadFlag is set by runCmd and scheduleCmd — used by printConfigSummary
-// to show the correct preload status without creating a circular reference.
+// skipPreloadFlag is set by runCmd — used by printConfigSummary to avoid
+// a circular reference back to runCmd.
 var skipPreloadFlag bool
 
 var dryRunCmd = &cobra.Command{
@@ -41,12 +43,15 @@ func dryRun(cmd *cobra.Command, args []string) error {
 
 func printConfigSummary(cfg *config.Config) {
 	fmt.Println("📋 Benchmark Plan:")
+
+	// ── Connection ───────────────────────────────────────────────────────────
 	fmt.Printf("   Connection   : %s\n", cfg.Connection.URI)
 	fmt.Printf("   Target       : %s.%s\n", cfg.Connection.Database, cfg.Connection.Collection)
 	fmt.Printf("   Read Pref    : %s | Read Concern: %s | Write Concern: %s\n",
 		cfg.Connection.ReadPreference, cfg.Connection.ReadConcern, cfg.Connection.WriteConcern)
 	fmt.Printf("   Pool Size    : %d\n\n", cfg.Connection.ConnectionPoolSize)
 
+	// ── Workload ─────────────────────────────────────────────────────────────
 	fmt.Printf("   Workload     : %s\n", cfg.Workload.Type)
 	if cfg.Workload.Type == config.WorkloadCustom {
 		w := cfg.Workload.Custom
@@ -58,6 +63,7 @@ func printConfigSummary(cfg *config.Config) {
 	fmt.Printf("   Scan Length  : %d–%d (%s distribution)\n",
 		effectiveScanMin(cfg), effectiveScanMax(cfg), effectiveScanDist(cfg))
 
+	// ── Execution ─────────────────────────────────────────────────────────────
 	fmt.Printf("\n   Mode         : %s\n", cfg.Execution.Mode)
 	switch cfg.Execution.Mode {
 	case config.ModeTime:
@@ -71,10 +77,11 @@ func printConfigSummary(cfg *config.Config) {
 	}
 	fmt.Printf("   Threads      : %d\n", cfg.Execution.Threads)
 	if cfg.Execution.TargetOpsPerSec > 0 {
-		fmt.Printf("   Target Rate  : %d ops/sec\n", cfg.Execution.TargetOpsPerSec)
+		fmt.Printf("   Target Rate  : %d ops/sec (token-bucket throttle)\n",
+			cfg.Execution.TargetOpsPerSec)
 	}
 
-	// Key distribution
+	// ── Key space ─────────────────────────────────────────────────────────────
 	dist := cfg.Execution.KeyDistribution
 	if dist == "" {
 		dist = "uniform"
@@ -104,55 +111,155 @@ func printConfigSummary(cfg *config.Config) {
 	}
 	fmt.Printf("   Insert Order : %s\n", insertOrder)
 
-	// Phases
+	// ── Phases ────────────────────────────────────────────────────────────────
 	fmt.Printf("\n")
 	if skipPreloadFlag {
 		fmt.Printf("   Preload      : ⏭️  skipped (--skip-preload)\n")
+	} else if !cfg.Phases.Preload.Enabled {
+		fmt.Printf("   Preload      : disabled\n")
 	} else {
-		fmt.Printf("   Preload      : %v (%d docs, %d threads)\n",
-			cfg.Phases.Preload.Enabled, cfg.Phases.Preload.DocumentCount, cfg.Phases.Preload.Threads)
+		fmt.Printf("   Preload      : %d docs | %d threads\n",
+			cfg.Phases.Preload.DocumentCount, cfg.Phases.Preload.Threads)
 		if cfg.Phases.Preload.SkipIfExists {
-			fmt.Printf("                  (skipIfExists = true)\n")
+			fmt.Printf("                  ↳ skipIfExists = true (skips if collection has data)\n")
 		}
 	}
 	fmt.Printf("   Warmup       : %v (%s)\n", cfg.Phases.Warmup.Enabled, cfg.Phases.Warmup.Duration)
-	fmt.Printf("   Indexes      : %d defined\n", len(cfg.Indexes))
-	for i, idx := range cfg.Indexes {
-		if len(idx.Fields) > 0 {
-			fmt.Printf("      [%d] compound:", i)
-			for _, f := range idx.Fields {
-				fmt.Printf(" %s(%s)", f.Field, f.Type)
+
+	// ── Indexes ───────────────────────────────────────────────────────────────
+	if len(cfg.Indexes) == 0 {
+		fmt.Printf("   Indexes      : none — only default _id index\n")
+		fmt.Printf("                  ↳ matches original YCSB behaviour (no secondary indexes)\n")
+	} else {
+		fmt.Printf("   Indexes      : %d defined\n", len(cfg.Indexes))
+		for i, idx := range cfg.Indexes {
+			if len(idx.Fields) > 0 {
+				fmt.Printf("      [%d] compound:", i)
+				for _, f := range idx.Fields {
+					fmt.Printf(" %s(%s)", f.Field, f.Type)
+				}
+				fmt.Printf(" sparse=%v unique=%v\n", idx.Sparse, idx.Unique)
+			} else {
+				fmt.Printf("      [%d] %s (%s) sparse=%v unique=%v\n",
+					i, idx.Field, idx.Type, idx.Sparse, idx.Unique)
 			}
-			fmt.Printf(" sparse=%v unique=%v\n", idx.Sparse, idx.Unique)
-		} else {
-			fmt.Printf("      [%d] %s (%s) sparse=%v unique=%v\n",
-				i, idx.Field, idx.Type, idx.Sparse, idx.Unique)
 		}
 	}
 
-	// Storage & reporting
+	// ── Storage & Reporting ───────────────────────────────────────────────────
 	fmt.Printf("\n   Store → MongoDB : %v | Local JSON : %v\n",
 		cfg.Results.MongoDB.Enabled, cfg.Results.Local.Enabled)
 	fmt.Printf("   Report → HTML   : %v | CSV        : %v\n",
 		cfg.Reporting.HTML.Enabled, cfg.Reporting.CSV.Enabled)
 	fmt.Printf("   Tags            : %v\n", cfg.Results.Tags)
 
-	// Schedule
+	// ── Schedule ──────────────────────────────────────────────────────────────
 	if cfg.Schedule.Enabled {
-		fmt.Printf("\n   ⏰ CRON Schedule : %s\n", cfg.Schedule.Cron)
-		if cfg.Schedule.RunFor != "" {
-			fmt.Printf("      Run For      : %s\n", cfg.Schedule.RunFor)
-		}
-		if cfg.Schedule.MaxRuns > 0 {
-			fmt.Printf("      Max Runs     : %d\n", cfg.Schedule.MaxRuns)
-		}
-		if cfg.Schedule.StartAt != "" {
-			fmt.Printf("      Start At     : %s\n", cfg.Schedule.StartAt)
-		}
-		if cfg.Schedule.StopAt != "" {
-			fmt.Printf("      Stop At      : %s\n", cfg.Schedule.StopAt)
-		}
+		printSchedulePlan(cfg)
 	}
+}
+
+// printSchedulePlan prints the full schedule configuration and the next
+// 5 trigger times so the user can verify the cron expression is correct.
+func printSchedulePlan(cfg *config.Config) {
+	bounds := cfg.Schedule.Bounds
+
+	fmt.Printf("\n   ⏰ CRON Schedule\n")
+	fmt.Printf("      Expression : %q\n", cfg.Schedule.Cron)
+	fmt.Printf("      Bound Type : %s\n", bounds.Type)
+
+	switch bounds.Type {
+	case "runFor":
+		fmt.Printf("      Run For    : %s\n", bounds.RunFor)
+		if d, err := bounds.ParseRunFor(); err == nil {
+			fmt.Printf("      Stops at   : ~%s\n",
+				time.Now().Add(d).Format("2006-01-02 15:04:05 UTC"))
+		}
+	case "maxRuns":
+		fmt.Printf("      Max Runs   : %d\n", bounds.MaxRuns)
+	case "timeWindow":
+		fmt.Printf("      Start At   : %s\n", bounds.StartAt)
+		fmt.Printf("      Stop At    : %s\n", bounds.StopAt)
+		if startAt, err := bounds.ParseStartAt(); err == nil && time.Now().Before(startAt) {
+			fmt.Printf("      Wait Time  : %s until window opens\n",
+				time.Until(startAt).Round(time.Second))
+		}
+	case "unlimited":
+		fmt.Printf("      Runs indefinitely — stop with Ctrl+C\n")
+	}
+
+	// Compute next 5 trigger times
+	triggers, err := nextCronTriggers(cfg.Schedule.Cron, 5, time.Now())
+	if err != nil {
+		fmt.Printf("\n      ⚠️  Could not parse cron expression: %v\n", err)
+		return
+	}
+
+	fmt.Printf("\n      Next 5 trigger times:\n")
+	for i, t := range triggers {
+		marker := ""
+		// For timeWindow, mark triggers that fall outside the window
+		if bounds.Type == "timeWindow" {
+			startAt, _ := bounds.ParseStartAt()
+			stopAt, _ := bounds.ParseStopAt()
+			if t.Before(startAt) {
+				marker = "  ⏭️  (before window — will be skipped)"
+			} else if t.After(stopAt) {
+				marker = "  🛑 (after window — scheduler stopped)"
+			} else {
+				marker = "  ✅"
+			}
+		}
+		fmt.Printf("         %d. %s%s\n", i+1,
+			t.Format("2006-01-02 15:04:05 UTC"), marker)
+	}
+
+	// Estimated run count
+	switch bounds.Type {
+	case "runFor":
+		if d, err := bounds.ParseRunFor(); err == nil {
+			deadline := time.Now().Add(d)
+			all, _ := nextCronTriggers(cfg.Schedule.Cron, 10000, time.Now())
+			count := 0
+			for _, t := range all {
+				if t.After(deadline) {
+					break
+				}
+				count++
+			}
+			fmt.Printf("\n      📊 Estimated runs in %s: %d\n", bounds.RunFor, count)
+		}
+	case "maxRuns":
+		fmt.Printf("\n      📊 Will stop after exactly %d completed runs\n", bounds.MaxRuns)
+	case "timeWindow":
+		startAt, _ := bounds.ParseStartAt()
+		stopAt, _ := bounds.ParseStopAt()
+		all, _ := nextCronTriggers(cfg.Schedule.Cron, 10000, startAt)
+		count := 0
+		for _, t := range all {
+			if t.After(stopAt) {
+				break
+			}
+			count++
+		}
+		fmt.Printf("\n      📊 Estimated runs in window: %d\n", count)
+	}
+}
+
+// nextCronTriggers returns the next n trigger times from the given start time.
+func nextCronTriggers(expr string, n int, from time.Time) ([]time.Time, error) {
+	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+	schedule, err := parser.Parse(expr)
+	if err != nil {
+		return nil, err
+	}
+	times := make([]time.Time, n)
+	t := from
+	for i := 0; i < n; i++ {
+		t = schedule.Next(t)
+		times[i] = t
+	}
+	return times, nil
 }
 
 // ── Scan config helpers ───────────────────────────────────────────────────────
