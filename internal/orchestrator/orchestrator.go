@@ -12,6 +12,7 @@ import (
 	"github.com/yourusername/mongo-ycsb/internal/loader"
 	"github.com/yourusername/mongo-ycsb/internal/metrics"
 	"github.com/yourusername/mongo-ycsb/internal/models"
+	"github.com/yourusername/mongo-ycsb/internal/reporter"
 	"github.com/yourusername/mongo-ycsb/internal/worker"
 	"github.com/yourusername/mongo-ycsb/internal/workloads"
 	"go.uber.org/zap"
@@ -35,12 +36,12 @@ func New(cfg *config.Config, log *zap.Logger, skipPreload bool) *Orchestrator {
 	}
 }
 
-// Run executes: connect → preload → indexes → warmup → benchmark → summary.
+// Run executes: connect → preload → indexes → warmup → benchmark → report.
 func (o *Orchestrator) Run(ctx context.Context) (*models.RunResult, error) {
 	fmt.Printf("\n🔑 Run ID : %s\n\n", o.runID)
 	o.log.Info("benchmark starting", zap.String("run_id", o.runID))
 
-	// ── 1. Benchmark client — established first, reused throughout ───────────
+	// ── 1. Benchmark client ──────────────────────────────────────────────────
 	fmt.Printf("🔌 Pre-warming %d benchmark connections...\n", o.cfg.Execution.Threads)
 	benchClient, err := db.NewBenchmarkClient(ctx, &o.cfg.Connection)
 	if err != nil {
@@ -58,8 +59,6 @@ func (o *Orchestrator) Run(ctx context.Context) (*models.RunResult, error) {
 	gen := datagen.New(&o.cfg.DocumentShape, 0)
 
 	if o.skipPreload {
-		// Reuse the already-established bench client to count docs —
-		// no extra connection needed.
 		fmt.Printf("⏭️  Skipping preload — using existing collection data\n")
 		count, err := benchColl.EstimatedDocumentCount(ctx)
 		if err != nil {
@@ -68,8 +67,6 @@ func (o *Orchestrator) Run(ctx context.Context) (*models.RunResult, error) {
 		gen = datagen.New(&o.cfg.DocumentShape, count)
 		fmt.Printf("   ↳ Found %d existing documents\n\n", count)
 	} else {
-		// Preload uses its own client with retries enabled so transient
-		// connection hiccups during bulk inserts don't abort the preload.
 		preloadClient, err := db.NewPreloadClient(ctx, &o.cfg.Connection)
 		if err != nil {
 			return nil, fmt.Errorf("preload connection failed: %w", err)
@@ -80,13 +77,11 @@ func (o *Orchestrator) Run(ctx context.Context) (*models.RunResult, error) {
 
 		ldr := loader.New(&o.cfg.Phases, preloadColl, gen, o.log)
 
-		// Preload BEFORE indexes so Drop() doesn't wipe them.
 		if err := ldr.Preload(ctx); err != nil {
 			_ = preloadClient.Disconnect(ctx)
 			return nil, err
 		}
 
-		// Create indexes AFTER preload.
 		fmt.Printf("🔧 Creating indexes...\n")
 		if err := ldr.CreateIndexes(ctx, o.cfg.Indexes); err != nil {
 			_ = preloadClient.Disconnect(ctx)
@@ -104,7 +99,7 @@ func (o *Orchestrator) Run(ctx context.Context) (*models.RunResult, error) {
 		return nil, err
 	}
 
-	// ── 4. Warmup — metrics discarded, no ticker ─────────────────────────────
+	// ── 4. Warmup — recorder is reset after so warmup ops don't pollute data ─
 	if o.cfg.Phases.Warmup.Enabled {
 		warmupDur, err := time.ParseDuration(o.cfg.Phases.Warmup.Duration)
 		if err != nil {
@@ -119,21 +114,20 @@ func (o *Orchestrator) Run(ctx context.Context) (*models.RunResult, error) {
 		warmupCtx, cancel := context.WithTimeout(ctx, warmupDur)
 		warmupPool := worker.NewPool(
 			&warmupExecCfg, benchColl, selector, gen,
-			metrics.NewHdrRecorder(), // discarded — not attached to ticker
+			metrics.NewHdrRecorder(), // separate recorder — discarded
 			o.log,
 		)
 		_ = warmupPool.Run(warmupCtx)
 		cancel()
 	}
 
-	// ── 5. Benchmark — HDR recorder + live ticker + system sampler ───────────
+	// ── 5. Benchmark ─────────────────────────────────────────────────────────
+	// Fresh recorder after warmup — histogram starts clean.
 	recorder := metrics.NewHdrRecorder()
 
-	// System sampler — always runs, samples CPU/memory every interval.
 	sampler := metrics.NewSystemSampler(o.cfg.Reporting.Console.RefreshIntervalMs)
 	sampler.Start()
 
-	// Ticker — always runs for delta recording; only prints if console enabled.
 	ticker := metrics.NewTicker(
 		recorder,
 		o.cfg.Reporting.Console.RefreshIntervalMs,
@@ -153,14 +147,12 @@ func (o *Orchestrator) Run(ctx context.Context) (*models.RunResult, error) {
 	}
 	elapsed := time.Since(start)
 
-	// Stop observability before reading final metrics so we get a clean snapshot.
 	ticker.Stop()
 	sampler.Stop()
 
 	// ── 6. Build result ──────────────────────────────────────────────────────
 	snap := recorder.Snapshot()
 
-	// Convert metrics.DeltaPoint → models.DeltaPoint
 	metricDeltas := recorder.Deltas()
 	modelDeltas := make([]models.DeltaPoint, len(metricDeltas))
 	for i, d := range metricDeltas {
@@ -172,7 +164,6 @@ func (o *Orchestrator) Run(ctx context.Context) (*models.RunResult, error) {
 		}
 	}
 
-	// Convert metrics.SystemSample → models.SystemSample
 	sysSamples := sampler.Samples()
 	modelSysSamples := make([]models.SystemSample, len(sysSamples))
 	for i, s := range sysSamples {
@@ -200,6 +191,28 @@ func (o *Orchestrator) Run(ctx context.Context) (*models.RunResult, error) {
 	}
 
 	printSummary(result)
+
+	// ── 7. Persist & report ──────────────────────────────────────────────────
+	fmt.Printf("\n📤 Saving results...\n")
+
+	mongoRep := reporter.NewMongoReporter(&o.cfg.Results.MongoDB)
+	if err := mongoRep.Save(ctx, result); err != nil {
+		o.log.Warn("MongoDB reporter failed", zap.Error(err))
+		fmt.Printf("⚠️  MongoDB save failed: %v\n", err)
+	}
+
+	localRep := reporter.NewLocalReporter(&o.cfg.Results.Local, &o.cfg.Reporting.CSV)
+	if err := localRep.Save(result); err != nil {
+		o.log.Warn("local reporter failed", zap.Error(err))
+		fmt.Printf("⚠️  Local save failed: %v\n", err)
+	}
+
+	htmlRep := reporter.NewHTMLReporter(&o.cfg.Reporting.HTML)
+	if err := htmlRep.Save(result); err != nil {
+		o.log.Warn("HTML reporter failed", zap.Error(err))
+		fmt.Printf("⚠️  HTML report failed: %v\n", err)
+	}
+
 	return result, nil
 }
 
@@ -237,9 +250,6 @@ func printSummary(r *models.RunResult) {
 			op, m.Count, m.Errors, m.MeanMs, m.P50Ms, m.P95Ms, m.P99Ms, m.P999Ms)
 	}
 
-	fmt.Printf("\n   Delta snapshots   : %d\n", len(r.Delta))
-	fmt.Printf("   System samples    : %d\n", len(r.SystemSamples))
-
 	if len(r.SystemSamples) > 0 {
 		totalCPU, peakMem := 0.0, 0.0
 		for _, s := range r.SystemSamples {
@@ -248,8 +258,8 @@ func printSummary(r *models.RunResult) {
 				peakMem = s.MemoryMB
 			}
 		}
-		fmt.Printf("   Avg CPU           : %.1f%%\n", totalCPU/float64(len(r.SystemSamples)))
-		fmt.Printf("   Peak Memory       : %.0f MB\n", peakMem)
+		fmt.Printf("\n   Avg CPU  : %.1f%%\n", totalCPU/float64(len(r.SystemSamples)))
+		fmt.Printf("   Peak Mem : %.0f MB\n", peakMem)
 	}
 	fmt.Printf("──────────────────────────────────────────────────────────────────────────\n")
 }

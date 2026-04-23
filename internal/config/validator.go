@@ -87,9 +87,56 @@ func (c *Config) Validate() []error {
 		errs = append(errs, fmt.Errorf("phases.preload.threads must be > 0 when preload is enabled"))
 	}
 
+	// ── Indexes ─────────────────────────────────────────────────────────────
+	validIndexTypes := map[string]bool{
+		"asc": true, "desc": true, "text": true, "geo2dsphere": true,
+	}
+	for i, idx := range c.Indexes {
+		if len(idx.Fields) > 0 {
+			// Compound index validation
+			for j, f := range idx.Fields {
+				if f.Field == "" {
+					errs = append(errs, fmt.Errorf("indexes[%d].fields[%d].field is required", i, j))
+				}
+				if f.Type != "" && !validIndexTypes[f.Type] {
+					errs = append(errs, fmt.Errorf(
+						"indexes[%d].fields[%d].type must be one of: asc, desc, text, geo2dsphere", i, j,
+					))
+				}
+			}
+		} else {
+			// Single field index validation
+			if idx.Field == "" {
+				errs = append(errs, fmt.Errorf("indexes[%d].field is required", i))
+			}
+			if idx.Type != "" && !validIndexTypes[idx.Type] {
+				errs = append(errs, fmt.Errorf(
+					"indexes[%d].type must be one of: asc, desc, text, geo2dsphere", i,
+				))
+			}
+		}
+	}
+
 	// ── Schedule ────────────────────────────────────────────────────────────
-	if c.Schedule.Enabled && c.Schedule.Cron == "" {
-		errs = append(errs, fmt.Errorf("schedule.cron is required when schedule.enabled is true"))
+	if c.Schedule.Enabled {
+		if c.Schedule.Cron == "" {
+			errs = append(errs, fmt.Errorf("schedule.cron is required when schedule.enabled is true"))
+		}
+		if c.Schedule.StartAt != "" {
+			if _, err := c.Schedule.ParseStartAt(); err != nil {
+				errs = append(errs, fmt.Errorf("schedule.startAt must be RFC3339 format: %w", err))
+			}
+		}
+		if c.Schedule.StopAt != "" {
+			if _, err := c.Schedule.ParseStopAt(); err != nil {
+				errs = append(errs, fmt.Errorf("schedule.stopAt must be RFC3339 format: %w", err))
+			}
+		}
+		if c.Schedule.RunFor != "" {
+			if _, err := c.Schedule.ParseRunFor(); err != nil {
+				errs = append(errs, fmt.Errorf("schedule.runFor is invalid: %w", err))
+			}
+		}
 	}
 
 	// ── Results ─────────────────────────────────────────────────────────────

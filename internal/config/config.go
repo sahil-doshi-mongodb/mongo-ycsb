@@ -77,31 +77,44 @@ type CustomWorkload struct {
 
 type DocumentShapeConfig struct {
 	FieldCount       int  `mapstructure:"fieldCount"`
-	FieldSize        int  `mapstructure:"fieldSize"` // target bytes per string field
+	FieldSize        int  `mapstructure:"fieldSize"`
 	NestedDocs       bool `mapstructure:"nestedDocs"`
 	NestedDepth      int  `mapstructure:"nestedDepth"`
 	Arrays           bool `mapstructure:"arrays"`
 	ArraySize        int  `mapstructure:"arraySize"`
-	UseRealisticData bool `mapstructure:"useRealisticData"` // faker vs random strings
+	UseRealisticData bool `mapstructure:"useRealisticData"`
 }
 
 // ─── Indexes ──────────────────────────────────────────────────────────────────
 
+// IndexConfig supports both single-field and compound indexes.
+// If Fields is populated it takes precedence over Field/Type.
 type IndexConfig struct {
-	Field  string `mapstructure:"field"`
-	Type   string `mapstructure:"type"` // asc | desc | text | geo2dsphere
-	Sparse bool   `mapstructure:"sparse"`
-	Unique bool   `mapstructure:"unique"`
+	// Single field index
+	Field string `mapstructure:"field"`
+	Type  string `mapstructure:"type"` // asc | desc | text | geo2dsphere
+
+	// Compound index — takes precedence over Field/Type if set
+	Fields []IndexField `mapstructure:"fields"`
+
+	Sparse bool `mapstructure:"sparse"`
+	Unique bool `mapstructure:"unique"`
+}
+
+// IndexField is one key within a compound index.
+type IndexField struct {
+	Field string `mapstructure:"field"`
+	Type  string `mapstructure:"type"` // asc | desc | text | geo2dsphere
 }
 
 // ─── Execution ────────────────────────────────────────────────────────────────
 
 type ExecutionConfig struct {
 	Mode            ExecutionMode `mapstructure:"mode"`
-	Duration        string        `mapstructure:"duration"` // e.g. "5m"
+	Duration        string        `mapstructure:"duration"`
 	OperationCount  int64         `mapstructure:"operationCount"`
 	Threads         int           `mapstructure:"threads"`
-	TargetOpsPerSec int           `mapstructure:"targetOpsPerSec"` // 0 = unlimited
+	TargetOpsPerSec int           `mapstructure:"targetOpsPerSec"`
 	Rampup          RampupConfig  `mapstructure:"rampup"`
 }
 
@@ -109,7 +122,7 @@ type RampupConfig struct {
 	InitialThreads int    `mapstructure:"initialThreads"`
 	MaxThreads     int    `mapstructure:"maxThreads"`
 	StepSize       int    `mapstructure:"stepSize"`
-	StepDuration   string `mapstructure:"stepDuration"` // e.g. "30s"
+	StepDuration   string `mapstructure:"stepDuration"`
 }
 
 func (e *ExecutionConfig) ParseDuration() (time.Duration, error) {
@@ -129,6 +142,7 @@ type PhasesConfig struct {
 
 type PreloadConfig struct {
 	Enabled       bool  `mapstructure:"enabled"`
+	SkipIfExists  bool  `mapstructure:"skipIfExists"` // skip if collection has data
 	DocumentCount int64 `mapstructure:"documentCount"`
 	Threads       int   `mapstructure:"threads"`
 }
@@ -143,6 +157,36 @@ type WarmupConfig struct {
 type ScheduleConfig struct {
 	Enabled bool   `mapstructure:"enabled"`
 	Cron    string `mapstructure:"cron"`
+
+	// Bounding — all optional, first limit hit wins
+	StartAt string `mapstructure:"startAt"` // RFC3339 timestamp
+	StopAt  string `mapstructure:"stopAt"`  // RFC3339 timestamp
+	RunFor  string `mapstructure:"runFor"`  // duration e.g. "600s", "2h"
+	MaxRuns int    `mapstructure:"maxRuns"` // 0 = unlimited
+}
+
+// ParseStartAt parses the StartAt field as a time.Time.
+func (s *ScheduleConfig) ParseStartAt() (time.Time, error) {
+	if s.StartAt == "" {
+		return time.Time{}, nil
+	}
+	return time.Parse(time.RFC3339, s.StartAt)
+}
+
+// ParseStopAt parses the StopAt field as a time.Time.
+func (s *ScheduleConfig) ParseStopAt() (time.Time, error) {
+	if s.StopAt == "" {
+		return time.Time{}, nil
+	}
+	return time.Parse(time.RFC3339, s.StopAt)
+}
+
+// ParseRunFor parses the RunFor field as a time.Duration.
+func (s *ScheduleConfig) ParseRunFor() (time.Duration, error) {
+	if s.RunFor == "" {
+		return 0, nil
+	}
+	return time.ParseDuration(s.RunFor)
 }
 
 // ─── Results storage ──────────────────────────────────────────────────────────
@@ -190,7 +234,6 @@ type CSVConfig struct {
 
 // ─── Load ─────────────────────────────────────────────────────────────────────
 
-// Load unmarshals the viper config into a Config struct.
 func Load() (*Config, error) {
 	cfg := &Config{}
 	if err := viper.Unmarshal(cfg); err != nil {

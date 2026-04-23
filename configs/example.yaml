@@ -1,24 +1,19 @@
 # ============================================================
 # mongo-ycsb — Example Configuration
-# Copy to configs/default.yaml and customize.
-# CLI flags and MONGOYCSB_* env vars override any value here.
 # ============================================================
 
-# ── MongoDB Connection ───────────────────────────────────────
 connection:
-  uri: "mongodb+srv://mongoadmin:passwordone@consultnew.3eano.mongodb.net/"       # Atlas SRV: mongodb+srv://user:pass@cluster.mongodb.net
+  uri: "mongodb+srv://mongoadmin:passwordone@consultnew.3eano.mongodb.net/"
   database: "ycsb"
   collection: "usertable"
-  readPreference: "primary"             # primary | primaryPreferred | secondary | secondaryPreferred | nearest
-  readConcern: "local"                  # local | majority | linearizable | available
-  writeConcern: "w:1"                       # majority | w:1 | w:0
+  readPreference: "primary"
+  readConcern: "local"
+  writeConcern: "majority"
   connectionPoolSize: 100
   timeoutMs: 30000
 
-# ── Workload ─────────────────────────────────────────────────
 workload:
-  type: "A"                             # A | B | C | D | E | F | custom
-  # Only applied when type: custom — must sum to 100:
+  type: "A"
   custom:
     read: 50
     insert: 0
@@ -27,92 +22,82 @@ workload:
     scan: 0
     readModifyWrite: 0
 
-# Standard workload reference:
-#   A → 50% read / 50% update         (heavy update)
-#   B → 95% read / 5% update          (mostly reads)
-#   C → 100% read                     (read only)
-#   D → 95% read / 5% insert          (read latest)
-#   E → 95% scan / 5% insert          (short ranges)
-#   F → 50% read / 50% read-mod-write (read-modify-write)
-
-# ── Document Shape ───────────────────────────────────────────
 documentShape:
   fieldCount: 10
-  fieldSize: 100                        # target bytes per string field
-  nestedDocs: true
-  nestedDepth: 2                        # only when nestedDocs: true
-  arrays: true
-  arraySize: 5                          # only when arrays: true
-  useRealisticData: true                # true = faker data | false = random strings
+  fieldSize: 100
+  nestedDocs: false
+  nestedDepth: 2
+  arrays: false
+  arraySize: 5
+  useRealisticData: true
 
-# ── Index Creation (setup phase) ─────────────────────────────
+# Single field indexes
 indexes:
   - field: "field0"
-    type: "asc"                         # asc | desc | text | geo2dsphere
+    type: "asc"
     sparse: false
     unique: false
-  # - field: "location"
-  #   type: "geo2dsphere"
 
-# ── Execution ────────────────────────────────────────────────
+# Compound index example (uncomment to use):
+# indexes:
+#   - fields:
+#       - field: "field0"
+#         type: "asc"
+#       - field: "field1"
+#         type: "desc"
+#     sparse: false
+#     unique: false
+
 execution:
-  mode: "time"                          # time | ops | rampup
-  duration: "5m"                        # used when mode: time (e.g. 30s, 5m, 1h)
-  operationCount: 1000000               # used when mode: ops
-  threads: 10                           # concurrent goroutines
-  targetOpsPerSec: 0                    # 0 = unlimited
-
-  rampup:                               # only when mode: rampup
+  mode: "time"
+  duration: "5m"
+  operationCount: 1000000
+  threads: 10
+  targetOpsPerSec: 0
+  rampup:
     initialThreads: 1
     maxThreads: 100
     stepSize: 10
     stepDuration: "30s"
 
-# ── Phases ───────────────────────────────────────────────────
 phases:
   preload:
     enabled: true
-    skipIfExists: true 
-    documentCount: 100000               # docs to insert before benchmark starts
+    skipIfExists: false      # set true to skip preload if collection has data
+    documentCount: 100000
     threads: 20
-
   warmup:
     enabled: true
-    duration: "30s"                     # run workload without recording metrics
+    duration: "30s"
 
-# ── CRON Scheduling ──────────────────────────────────────────
 schedule:
   enabled: false
-  cron: "0 2 * * *"                     # every day at 02:00
+  cron: "0 2 * * *"
+  # Bounding — all optional, first limit hit wins:
+  startAt: ""               # e.g. "2026-05-01T00:00:00Z"
+  stopAt:  ""               # e.g. "2026-05-07T23:59:59Z"
+  runFor:  ""               # e.g. "600s" or "2h"
+  maxRuns: 0                # 0 = unlimited
 
-# ── Results Storage ───────────────────────────────────────────
 results:
   mongodb:
     enabled: true
-    uri: "mongodb://localhost:27017"    # can be a separate "results" cluster
+    uri: "mongodb+srv://mongoadmin:passwordone@consultnew.3eano.mongodb.net/"
     database: "ycsb_results"
     collection: "runs"
-
   local:
     enabled: true
-    path: "./results"                   # fallback — writes <run_id>.json here
-
-  tags:                                 # free-form labels for filtering & comparison
+    path: "./results"
+  tags:
     - "baseline"
-    # - "after-index"
-    # - "atlas-m30"
-    # - "sharded"
 
-# ── Reporting ────────────────────────────────────────────────
 reporting:
   console:
     enabled: true
     refreshIntervalMs: 1000
-
   html:
     enabled: true
     outputPath: "./reports"
-
   csv:
     enabled: true
     outputPath: "./results"

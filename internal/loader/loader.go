@@ -15,8 +15,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// batchSize reduced from 500 to 100 — smaller batches mean shorter-lived
-// operations so transient connection issues affect less work and recover faster.
 const batchSize = 100
 
 // Loader handles the setup and preload phases.
@@ -36,6 +34,20 @@ func New(cfg *config.PhasesConfig, coll *mongo.Collection, gen *datagen.Generato
 func (l *Loader) Preload(ctx context.Context) error {
 	if !l.cfg.Preload.Enabled {
 		return nil
+	}
+
+	// skipIfExists — count docs and skip if already populated
+	if l.cfg.Preload.SkipIfExists {
+		count, err := l.coll.EstimatedDocumentCount(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to count documents: %w", err)
+		}
+		if count > 0 {
+			l.log.Info("preload skipped — collection already has data",
+				zap.Int64("existing_docs", count))
+			fmt.Printf("⏭️  Preload skipped — collection already has %d documents\n\n", count)
+			return nil
+		}
 	}
 
 	total := l.cfg.Preload.DocumentCount
@@ -58,8 +70,6 @@ func (l *Loader) Preload(ctx context.Context) error {
 		done       = make(chan int64, threads)
 	)
 
-	// Progress reporter — owns its own WaitGroup so 100% always prints
-	// before "Preload complete", regardless of workerWg timing.
 	progressWg.Add(1)
 	go func() {
 		defer progressWg.Done()
@@ -106,21 +116,16 @@ func (l *Loader) Preload(ctx context.Context) error {
 // insertN inserts n documents in batches and returns the total inserted.
 func (l *Loader) insertN(ctx context.Context, n int64, rng *rand.Rand, faker *gofakeit.Faker) (int64, error) {
 	var inserted int64
-
 	for inserted < n {
 		batch := int64(batchSize)
 		if inserted+batch > n {
 			batch = n - inserted
 		}
-
 		docs := make([]interface{}, batch)
 		for i := int64(0); i < batch; i++ {
 			key := l.gen.NextInsertKey()
 			docs[i] = l.gen.BuildDocument(key, rng, faker)
 		}
-
-		// SetOrdered(false) — if one doc in the batch fails, the rest
-		// still proceed rather than halting the entire batch.
 		opts := options.InsertMany().SetOrdered(false)
 		if _, err := l.coll.InsertMany(ctx, docs, opts); err != nil {
 			return inserted, err
@@ -130,7 +135,7 @@ func (l *Loader) insertN(ctx context.Context, n int64, rng *rand.Rand, faker *go
 	return inserted, nil
 }
 
-// CreateIndexes creates indexes defined in config as part of the setup phase.
+// CreateIndexes supports both single-field and compound indexes.
 func (l *Loader) CreateIndexes(ctx context.Context, indexes []config.IndexConfig) error {
 	if len(indexes) == 0 {
 		return nil
@@ -138,7 +143,18 @@ func (l *Loader) CreateIndexes(ctx context.Context, indexes []config.IndexConfig
 
 	models := make([]mongo.IndexModel, 0, len(indexes))
 	for _, idx := range indexes {
-		key := bson.D{{Key: idx.Field, Value: indexValue(idx.Type)}}
+		var key bson.D
+
+		if len(idx.Fields) > 0 {
+			// Compound index — build multi-key bson.D
+			for _, f := range idx.Fields {
+				key = append(key, bson.E{Key: f.Field, Value: indexValue(f.Type)})
+			}
+		} else {
+			// Single field index
+			key = bson.D{{Key: idx.Field, Value: indexValue(idx.Type)}}
+		}
+
 		opts := options.Index().SetSparse(idx.Sparse).SetUnique(idx.Unique)
 		models = append(models, mongo.IndexModel{Keys: key, Options: opts})
 	}
