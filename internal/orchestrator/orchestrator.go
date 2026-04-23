@@ -62,12 +62,12 @@ func (o *Orchestrator) Run(ctx context.Context) (*models.RunResult, error) {
 
 	if o.skipPreload {
 		fmt.Printf("⏭️  Skipping preload — using existing collection data\n")
-		count, err := benchColl.EstimatedDocumentCount(ctx)
+		startingCount, err = getHighestKeyNumber(ctx, benchColl, o.cfg.Execution.EffectiveKeyPrefix())
 		if err != nil {
-			return nil, fmt.Errorf("failed to count existing documents: %w", err)
+			return nil, fmt.Errorf("failed to determine highest existing key: %w", err)
 		}
-		startingCount = count
-		fmt.Printf("   ↳ Found %d existing documents\n\n", count)
+		fmt.Printf("   ↳ Highest existing key : %s%d\n", o.cfg.Execution.EffectiveKeyPrefix(), startingCount-1)
+		fmt.Printf("   ↳ Next insert will use : %s%d\n\n", o.cfg.Execution.EffectiveKeyPrefix(), startingCount)
 	} else {
 		preloadClient, err := db.NewPreloadClient(ctx, &o.cfg.Connection)
 		if err != nil {
@@ -100,6 +100,16 @@ func (o *Orchestrator) Run(ctx context.Context) (*models.RunResult, error) {
 
 		startingCount = o.cfg.Phases.Preload.DocumentCount
 		fmt.Printf("✅ Indexes ready\n\n")
+	}
+
+	// ── Workload D: auto-switch to Latest distribution ───────────────────────────
+	// Original YCSB always uses Latest distribution for Workload D regardless of
+	// the global keyDistribution setting. Replicate that behaviour here.
+	if o.cfg.Workload.Type == config.WorkloadD &&
+		o.cfg.Execution.KeyDistribution != "latest" {
+		fmt.Printf("ℹ️  Workload D: auto-switching key distribution to 'latest'\n")
+		fmt.Printf("   (original YCSB always uses Latest distribution for Workload D)\n\n")
+		o.cfg.Execution.KeyDistribution = "latest"
 	}
 
 	// ── 3. Generator with distribution ──────────────────────────────────────
@@ -238,6 +248,17 @@ func (o *Orchestrator) Run(ctx context.Context) (*models.RunResult, error) {
 		}
 	}
 
+	// Build error samples from recorder
+	var errorSamples []models.ErrorSample
+	for op, msgs := range recorder.ErrorMessages() {
+		for _, msg := range msgs {
+			errorSamples = append(errorSamples, models.ErrorSample{
+				Operation: op,
+				Message:   msg,
+			})
+		}
+	}
+
 	result := &models.RunResult{
 		RunID:         o.runID,
 		Timestamp:     time.Now().UTC(),
@@ -246,6 +267,7 @@ func (o *Orchestrator) Run(ctx context.Context) (*models.RunResult, error) {
 		Delta:         modelDeltas,
 		SystemSamples: modelSysSamples,
 		ServerStats:   serverStats,
+		ErrorSamples:  errorSamples,
 		Summary: models.RunSummary{
 			DurationSeconds: elapsed.Seconds(),
 			TotalOps:        snap.TotalOps,
@@ -378,5 +400,64 @@ func printSummary(r *models.RunResult) {
 			"", d.Insert, d.Query, d.Update, d.Delete)
 	}
 
+	if len(r.ErrorSamples) > 0 {
+		fmt.Printf("\n   ⚠️  Error Samples:\n")
+		for _, e := range r.ErrorSamples {
+			fmt.Printf("      [%s] %s\n", e.Operation, e.Message)
+		}
+	}
+
 	fmt.Printf("──────────────────────────────────────────────────────────────────────────────────────\n")
+}
+
+// getHighestKeyNumber finds the highest numeric suffix of existing _id values
+// in the collection. This is used to correctly set the nextKey counter when
+// --skip-preload is used, avoiding duplicate key errors caused by deletions
+// lowering EstimatedDocumentCount below the actual highest inserted key.
+func getHighestKeyNumber(ctx context.Context, coll *mongo.Collection, keyPrefix string) (int64, error) {
+	// Fast path — if collection is empty, start from 0
+	est, err := coll.EstimatedDocumentCount(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if est == 0 {
+		return 0, nil
+	}
+
+	// Aggregate to find the maximum numeric suffix across all documents.
+	// $substrCP strips the key prefix, $toLong converts the suffix to integer.
+	pipeline := bson.A{
+		bson.D{{Key: "$match", Value: bson.D{
+			{Key: "_id", Value: bson.D{{Key: "$regex", Value: "^" + keyPrefix}}},
+		}}},
+		bson.D{{Key: "$group", Value: bson.D{
+			{Key: "_id", Value: nil},
+			{Key: "maxKey", Value: bson.D{{Key: "$max", Value: bson.D{
+				{Key: "$toLong", Value: bson.D{
+					{Key: "$substrCP", Value: bson.A{"$_id", len(keyPrefix), 20}},
+				}},
+			}}}},
+		}}},
+	}
+
+	cursor, err := coll.Aggregate(ctx, pipeline)
+	if err != nil {
+		// Fallback to estimated count if aggregation fails
+		fmt.Printf("⚠️  Could not determine highest key via aggregation, falling back to EstimatedDocumentCount\n")
+		return est, nil
+	}
+	defer cursor.Close(ctx)
+
+	var result struct {
+		MaxKey int64 `bson:"maxKey"`
+	}
+	if cursor.Next(ctx) {
+		if err := cursor.Decode(&result); err != nil {
+			return est, nil
+		}
+		// Return max + 1 so next insert uses the first truly free key
+		return result.MaxKey + 1, nil
+	}
+
+	return est, nil
 }

@@ -16,6 +16,7 @@ type RunResult struct {
 	Delta         []DeltaPoint   `bson:"delta"          json:"delta"`
 	SystemSamples []SystemSample `bson:"system_samples" json:"system_samples"`
 	ServerStats   *ServerStats   `bson:"server_stats,omitempty" json:"server_stats,omitempty"`
+	ErrorSamples  []ErrorSample  `bson:"error_samples,omitempty" json:"error_samples,omitempty"`
 }
 
 // RunConfig is a snapshot of the config used for this run.
@@ -90,6 +91,12 @@ type OpcounterSnapshot struct {
 	Delete  int64 `bson:"delete"  json:"delete"`
 	GetMore int64 `bson:"getmore" json:"getmore"`
 	Command int64 `bson:"command" json:"command"`
+}
+
+// ErrorSample holds a sample error message captured during the run.
+type ErrorSample struct {
+	Operation string `bson:"operation" json:"operation"`
+	Message   string `bson:"message"   json:"message"`
 }
 
 // FromConfig builds a RunConfig snapshot from the full benchmark config.

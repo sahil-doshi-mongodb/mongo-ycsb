@@ -75,7 +75,10 @@ func printConfigSummary(cfg *config.Config) {
 		fmt.Printf("   Ramp-up      : %d → %d threads (step +%d every %s)\n",
 			r.InitialThreads, r.MaxThreads, r.StepSize, r.StepDuration)
 	}
-	fmt.Printf("   Threads      : %d\n", cfg.Execution.Threads)
+	// Don't show threads for rampup — it's controlled by the rampup config, not execution.threads
+	if cfg.Execution.Mode != config.ModeRampup {
+		fmt.Printf("   Threads      : %d\n", cfg.Execution.Threads)
+	}
 	if cfg.Execution.TargetOpsPerSec > 0 {
 		fmt.Printf("   Target Rate  : %d ops/sec (token-bucket throttle)\n",
 			cfg.Execution.TargetOpsPerSec)

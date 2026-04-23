@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/yourusername/mongo-ycsb/internal/config"
 	"github.com/yourusername/mongo-ycsb/internal/models"
@@ -185,14 +186,25 @@ func (c *Comparer) loadByTagFromMongo(ctx context.Context, tag string) (*models.
 	defer client.Disconnect(ctx)
 
 	coll := client.Database(c.cfg.MongoDB.Database).Collection(c.cfg.MongoDB.Collection)
+	tags := splitTags(tag)
+	filter := bson.M{"tags": bson.M{"$all": tags}}
 
-	// Find most recent run with this tag
-	opts := options.FindOne().SetSort(bson.D{{Key: "timestamp", Value: -1}})
-	var result models.RunResult
-	err = coll.FindOne(ctx, bson.M{"tags": tag}, opts).Decode(&result)
+	// Count how many runs match — warn if ambiguous
+	count, err := coll.CountDocuments(ctx, filter)
 	if err != nil {
 		return nil, err
 	}
+	if count > 1 {
+		fmt.Printf("⚠️  %d runs match tag %q — using most recent. Use run IDs for precision.\n", count, tag)
+	}
+
+	opts := options.FindOne().SetSort(bson.D{{Key: "timestamp", Value: -1}})
+	var result models.RunResult
+	if err := coll.FindOne(ctx, filter, opts).Decode(&result); err != nil {
+		return nil, err
+	}
+
+	fmt.Printf("   ↳ Selected run %s (%s)\n", result.RunID, result.Timestamp.Format("2006-01-02 15:04:05"))
 	return &result, nil
 }
 
@@ -212,13 +224,14 @@ func (c *Comparer) loadFromJSON(id string) (*models.RunResult, error) {
 }
 
 func (c *Comparer) loadByTagFromJSON(tag string) (*models.RunResult, error) {
-	// Scan all JSON files in the results dir and find most recent with this tag
 	entries, err := os.ReadDir(c.cfg.Local.Path)
 	if err != nil {
 		return nil, fmt.Errorf("cannot read results dir %s: %w", c.cfg.Local.Path, err)
 	}
 
-	var best *models.RunResult
+	tags := splitTags(tag)
+
+	var matches []*models.RunResult
 	for _, e := range entries {
 		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
 			continue
@@ -235,19 +248,36 @@ func (c *Comparer) loadByTagFromJSON(tag string) (*models.RunResult, error) {
 		}
 		f.Close()
 
-		for _, t := range r.Tags {
-			if t == tag {
-				if best == nil || r.Timestamp.After(best.Timestamp) {
-					best = &r
-				}
-				break
-			}
+		if containsAllTags(r.Tags, tags) {
+			cp := r
+			matches = append(matches, &cp)
 		}
 	}
 
-	if best == nil {
+	if len(matches) == 0 {
 		return nil, fmt.Errorf("no run found with tag %q in %s", tag, c.cfg.Local.Path)
 	}
+
+	// Warn if ambiguous
+	if len(matches) > 1 {
+		fmt.Printf("⚠️  %d runs match tag %q — using most recent. Use run IDs for precision.\n",
+			len(matches), tag)
+		fmt.Printf("   Matching runs:\n")
+		for _, m := range matches {
+			fmt.Printf("      • %s  %s  tags: %v\n",
+				m.RunID, m.Timestamp.Format("2006-01-02 15:04:05"), m.Tags)
+		}
+	}
+
+	// Pick most recent
+	best := matches[0]
+	for _, m := range matches[1:] {
+		if m.Timestamp.After(best.Timestamp) {
+			best = m
+		}
+	}
+
+	fmt.Printf("   ↳ Selected run %s (%s)\n", best.RunID, best.Timestamp.Format("2006-01-02 15:04:05"))
 	return best, nil
 }
 
@@ -316,4 +346,32 @@ func unionOps(a, b map[string]models.OpMetric) []string {
 		}
 	}
 	return out
+}
+
+// splitTags splits a comma-separated tag string into individual tags,
+// trimming whitespace from each.
+func splitTags(tag string) []string {
+	parts := strings.Split(tag, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// containsAllTags returns true if haystack contains every tag in needles.
+func containsAllTags(haystack []string, needles []string) bool {
+	set := make(map[string]bool, len(haystack))
+	for _, h := range haystack {
+		set[h] = true
+	}
+	for _, n := range needles {
+		if !set[n] {
+			return false
+		}
+	}
+	return true
 }

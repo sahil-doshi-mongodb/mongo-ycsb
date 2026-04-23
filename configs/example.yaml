@@ -31,7 +31,7 @@ connection:
   # Atlas replica: "mongodb+srv://user:password@cluster.mongodb.net/"
   # With options:  "mongodb://host:27017/?replicaSet=rs0&authSource=admin"
   # REQUIRED — the benchmark will not start without this.
-  uri: "mongodb+srv://user:password@cluster.mongodb.net/"
+  uri: "mongodb+srv://mongoadmin:9rJO1MWZqNXoz4mW@consultnew.3eano.mongodb.net/"
 
   # Database to benchmark against.
   # Will be created automatically if it does not exist.
@@ -95,7 +95,7 @@ workload:
   #   E → 95% scan,   5% insert  [variable scan len]  (short ranges)
   #   F → 50% read,  50% read-modify-write            (RMW)
   #   custom → define your own mix below
-  type: "A"
+  type: "D"
 
   # writeAllFields — controls how many fields are updated per update op.
   #   false → update 1 randomly chosen field per operation (YCSB default)
@@ -114,12 +114,12 @@ workload:
   # Percentages must sum to exactly 100.
   # All six operation types can be combined freely.
   custom:
-    read: 50             # FindOne by _id
-    insert: 0            # InsertOne with a new key
-    update: 50           # UpdateOne by _id (1 field or all fields)
-    delete: 0            # DeleteOne by _id
+    read: 20             # FindOne by _id
+    insert: 40            # InsertOne with a new key
+    update: 30           # UpdateOne by _id (1 field or all fields)
+    delete: 5            # DeleteOne by _id
     scan: 0              # Find range by _id with a limit
-    readModifyWrite: 0   # FindOne then UpdateOne (2 ops, measured together)
+    readModifyWrite: 5   # FindOne then UpdateOne (2 ops, measured together)
 
   # scan — controls the length of scan operations.
   # Only relevant for Workload E or custom workloads with scan > 0.
@@ -131,7 +131,7 @@ workload:
     # Maximum number of documents to return per scan.
     # YCSB default: 1000
     # Workload E uses 100 — set this to 100 to match Workload E exactly.
-    maxLength: 1000
+    maxLength: 100
 
     # Distribution for scan length selection between minLength and maxLength.
     #   uniform → every length between min and max is equally likely
@@ -271,7 +271,7 @@ execution:
   # IMPORTANT: zipfian is the original YCSB default. Using uniform produces
   # significantly lower latency because the WiredTiger cache hit rate is
   # much higher. Always use zipfian for results comparable to original YCSB.
-  keyDistribution: "uniform"
+  keyDistribution: "zipfian"
 
   # Zipfian constant — controls skew (only used when keyDistribution=zipfian).
   # Range: (0, 1) — higher value = more skewed (more traffic to fewer keys).
@@ -311,10 +311,10 @@ execution:
   # in steps of stepSize, running each step for stepDuration.
   # Use this to find the concurrency level at which the cluster saturates.
   rampup:
-    initialThreads: 1     # starting concurrency
+    initialThreads: 5     # starting concurrency
     maxThreads: 100       # maximum concurrency
     stepSize: 10          # threads added per step
-    stepDuration: "30s"   # how long each step runs before increasing
+    stepDuration: "20s"   # how long each step runs before increasing
 
 
 # ─────────────────────────────────────────────────────────────
@@ -446,7 +446,7 @@ results:
     # Connection string for the results cluster.
     # Can be the same cluster as connection.uri but a different database.
     # REQUIRED when enabled is true.
-    uri: "mongodb+srv://user:password@cluster.mongodb.net/"
+    uri: "mongodb+srv://mongoadmin:9rJO1MWZqNXoz4mW@consultnew.3eano.mongodb.net/"
 
     # Database in the results cluster where run documents are stored.
     database: "ycsb_results"

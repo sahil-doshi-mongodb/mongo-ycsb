@@ -54,6 +54,7 @@ type HdrRecorder struct {
 	mu        sync.Mutex
 	hists     map[string]*hdrhistogram.Histogram
 	opErrs    map[string]int64
+	errorMsgs map[string][]string
 	totalOps  atomic.Int64
 	totalErrs atomic.Int64
 	startTime time.Time
@@ -70,6 +71,7 @@ func NewHdrRecorder() *HdrRecorder {
 	return &HdrRecorder{
 		hists:     make(map[string]*hdrhistogram.Histogram),
 		opErrs:    make(map[string]int64),
+		errorMsgs: make(map[string][]string),
 		startTime: now,
 		lastTime:  now,
 	}
@@ -86,13 +88,17 @@ func (r *HdrRecorder) Record(op workloads.OpType, latency time.Duration, err err
 	r.mu.Lock()
 	h, ok := r.hists[key]
 	if !ok {
-		// 1µs → 60s, 3 significant figures
 		h = hdrhistogram.New(1, 60_000_000, 3)
 		r.hists[key] = h
 	}
 	_ = h.RecordValue(us)
 	if err != nil {
 		r.opErrs[key]++
+		// Capture up to 5 unique error messages per operation type
+		if len(r.errorMsgs[key]) < 5 {
+			msg := err.Error()
+			r.errorMsgs[key] = append(r.errorMsgs[key], msg)
+		}
 	}
 	r.mu.Unlock()
 
@@ -195,5 +201,18 @@ func (r *HdrRecorder) Deltas() []DeltaPoint {
 	defer r.deltasMu.Unlock()
 	out := make([]DeltaPoint, len(r.deltas))
 	copy(out, r.deltas)
+	return out
+}
+
+// ErrorMessages returns captured error message samples per operation type.
+func (r *HdrRecorder) ErrorMessages() map[string][]string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make(map[string][]string, len(r.errorMsgs))
+	for k, v := range r.errorMsgs {
+		cp := make([]string, len(v))
+		copy(cp, v)
+		out[k] = cp
+	}
 	return out
 }
