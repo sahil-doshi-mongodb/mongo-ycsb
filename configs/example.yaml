@@ -1,0 +1,117 @@
+# ============================================================
+# mongo-ycsb — Example Configuration
+# Copy to configs/default.yaml and customize.
+# CLI flags and MONGOYCSB_* env vars override any value here.
+# ============================================================
+
+# ── MongoDB Connection ───────────────────────────────────────
+connection:
+  uri: "mongodb+srv://mongoadmin:passwordone@consultnew.3eano.mongodb.net/"       # Atlas SRV: mongodb+srv://user:pass@cluster.mongodb.net
+  database: "ycsb"
+  collection: "usertable"
+  readPreference: "primary"             # primary | primaryPreferred | secondary | secondaryPreferred | nearest
+  readConcern: "local"                  # local | majority | linearizable | available
+  writeConcern: "majority"              # majority | w:1 | w:0
+  connectionPoolSize: 100
+  timeoutMs: 30000
+
+# ── Workload ─────────────────────────────────────────────────
+workload:
+  type: "A"                             # A | B | C | D | E | F | custom
+  # Only applied when type: custom — must sum to 100:
+  custom:
+    read: 50
+    insert: 0
+    update: 50
+    delete: 0
+    scan: 0
+    readModifyWrite: 0
+
+# Standard workload reference:
+#   A → 50% read / 50% update         (heavy update)
+#   B → 95% read / 5% update          (mostly reads)
+#   C → 100% read                     (read only)
+#   D → 95% read / 5% insert          (read latest)
+#   E → 95% scan / 5% insert          (short ranges)
+#   F → 50% read / 50% read-mod-write (read-modify-write)
+
+# ── Document Shape ───────────────────────────────────────────
+documentShape:
+  fieldCount: 10
+  fieldSize: 100                        # target bytes per string field
+  nestedDocs: false
+  nestedDepth: 2                        # only when nestedDocs: true
+  arrays: false
+  arraySize: 5                          # only when arrays: true
+  useRealisticData: true                # true = faker data | false = random strings
+
+# ── Index Creation (setup phase) ─────────────────────────────
+indexes:
+  - field: "field0"
+    type: "asc"                         # asc | desc | text | geo2dsphere
+    sparse: false
+    unique: false
+  # - field: "location"
+  #   type: "geo2dsphere"
+
+# ── Execution ────────────────────────────────────────────────
+execution:
+  mode: "time"                          # time | ops | rampup
+  duration: "5m"                        # used when mode: time (e.g. 30s, 5m, 1h)
+  operationCount: 1000000               # used when mode: ops
+  threads: 10                           # concurrent goroutines
+  targetOpsPerSec: 0                    # 0 = unlimited
+
+  rampup:                               # only when mode: rampup
+    initialThreads: 1
+    maxThreads: 100
+    stepSize: 10
+    stepDuration: "30s"
+
+# ── Phases ───────────────────────────────────────────────────
+phases:
+  preload:
+    enabled: true
+    documentCount: 100000               # docs to insert before benchmark starts
+    threads: 20
+
+  warmup:
+    enabled: true
+    duration: "30s"                     # run workload without recording metrics
+
+# ── CRON Scheduling ──────────────────────────────────────────
+schedule:
+  enabled: false
+  cron: "0 2 * * *"                     # every day at 02:00
+
+# ── Results Storage ───────────────────────────────────────────
+results:
+  mongodb:
+    enabled: true
+    uri: "mongodb://localhost:27017"    # can be a separate "results" cluster
+    database: "ycsb_results"
+    collection: "runs"
+
+  local:
+    enabled: true
+    path: "./results"                   # fallback — writes <run_id>.json here
+
+  tags:                                 # free-form labels for filtering & comparison
+    - "baseline"
+    # - "after-index"
+    # - "atlas-m30"
+    # - "sharded"
+
+# ── Reporting ────────────────────────────────────────────────
+reporting:
+  console:
+    enabled: true
+    refreshIntervalMs: 1000
+
+  html:
+    enabled: true
+    outputPath: "./reports"
+
+  csv:
+    enabled: true
+    outputPath: "./results"
