@@ -14,6 +14,8 @@ connection:
 
 workload:
   type: "A"
+  # writeAllFields: false   # false = update 1 field (YCSB default)
+  # readAllFields: true     # true = read full document (YCSB default)
   custom:
     read: 50
     insert: 0
@@ -21,39 +23,41 @@ workload:
     delete: 0
     scan: 0
     readModifyWrite: 0
+  scan:
+    minLength: 1            # YCSB default
+    maxLength: 1000         # YCSB default; Workload E uses 100
+    distribution: "uniform"
 
 documentShape:
   fieldCount: 10
-  fieldSize: 100
+  fieldSize: 100            # exact bytes per field — set to 1000 to match Zepto
   nestedDocs: false
   nestedDepth: 2
   arrays: false
   arraySize: 5
-  useRealisticData: true
+  useRealisticData: false   # false = random bytes (YCSB default)
 
-# Single field indexes
 indexes:
   - field: "field0"
     type: "asc"
     sparse: false
     unique: false
 
-# Compound index example (uncomment to use):
-# indexes:
-#   - fields:
-#       - field: "field0"
-#         type: "asc"
-#       - field: "field1"
-#         type: "desc"
-#     sparse: false
-#     unique: false
-
 execution:
   mode: "time"
   duration: "5m"
   operationCount: 1000000
   threads: 10
-  targetOpsPerSec: 0
+  targetOpsPerSec: 0        # 0 = unlimited
+
+  # Key space & distribution
+  keyDistribution: "uniform"  # uniform | zipfian | latest | sequential
+  zipfianConstant: 0.99       # YCSB default
+  recordCount: 0              # 0 = use preload document count
+  keyPrefix: "user"           # YCSB default
+  keyZeroPadding: 0           # 0 = no padding; set e.g. 12 to match YCSB exactly
+  insertOrdering: "ordered"   # ordered | hashed (hashed avoids shard hotspots)
+
   rampup:
     initialThreads: 1
     maxThreads: 100
@@ -63,7 +67,7 @@ execution:
 phases:
   preload:
     enabled: true
-    skipIfExists: false      # set true to skip preload if collection has data
+    skipIfExists: false
     documentCount: 100000
     threads: 20
   warmup:
@@ -73,16 +77,15 @@ phases:
 schedule:
   enabled: false
   cron: "0 2 * * *"
-  # Bounding — all optional, first limit hit wins:
-  startAt: ""               # e.g. "2026-05-01T00:00:00Z"
-  stopAt:  ""               # e.g. "2026-05-07T23:59:59Z"
-  runFor:  ""               # e.g. "600s" or "2h"
-  maxRuns: 0                # 0 = unlimited
+  startAt: ""
+  stopAt: ""
+  runFor: ""
+  maxRuns: 0
 
 results:
   mongodb:
     enabled: true
-    uri: "mongodb+srv://mongoadmin:passwordone@consultnew.3eano.mongodb.net/"
+    uri: "mongodb://localhost:27017"
     database: "ycsb_results"
     collection: "runs"
   local:

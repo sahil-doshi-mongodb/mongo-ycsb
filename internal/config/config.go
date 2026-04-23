@@ -59,11 +59,13 @@ type ConnectionConfig struct {
 // ─── Workload ─────────────────────────────────────────────────────────────────
 
 type WorkloadConfig struct {
-	Type   WorkloadType   `mapstructure:"type"`
-	Custom CustomWorkload `mapstructure:"custom"`
+	Type           WorkloadType   `mapstructure:"type"`
+	Custom         CustomWorkload `mapstructure:"custom"`
+	WriteAllFields bool           `mapstructure:"writeAllFields"` // false = update 1 field (YCSB default)
+	ReadAllFields  bool           `mapstructure:"readAllFields"`  // true = read full doc (YCSB default)
+	Scan           ScanConfig     `mapstructure:"scan"`
 }
 
-// CustomWorkload percentages must sum to 100.
 type CustomWorkload struct {
 	Read            float64 `mapstructure:"read"`
 	Insert          float64 `mapstructure:"insert"`
@@ -73,38 +75,38 @@ type CustomWorkload struct {
 	ReadModifyWrite float64 `mapstructure:"readModifyWrite"`
 }
 
+// ScanConfig controls scan length distribution — mirrors YCSB Workload E params.
+type ScanConfig struct {
+	MinLength    int    `mapstructure:"minLength"`    // default 1
+	MaxLength    int    `mapstructure:"maxLength"`    // default 1000; Workload E uses 100
+	Distribution string `mapstructure:"distribution"` // uniform | zipfian (default uniform)
+}
+
 // ─── Document shape ───────────────────────────────────────────────────────────
 
 type DocumentShapeConfig struct {
 	FieldCount       int  `mapstructure:"fieldCount"`
-	FieldSize        int  `mapstructure:"fieldSize"`
+	FieldSize        int  `mapstructure:"fieldSize"` // exact bytes per field value
 	NestedDocs       bool `mapstructure:"nestedDocs"`
 	NestedDepth      int  `mapstructure:"nestedDepth"`
 	Arrays           bool `mapstructure:"arrays"`
 	ArraySize        int  `mapstructure:"arraySize"`
-	UseRealisticData bool `mapstructure:"useRealisticData"`
+	UseRealisticData bool `mapstructure:"useRealisticData"` // false = random bytes (YCSB default)
 }
 
 // ─── Indexes ──────────────────────────────────────────────────────────────────
 
-// IndexConfig supports both single-field and compound indexes.
-// If Fields is populated it takes precedence over Field/Type.
 type IndexConfig struct {
-	// Single field index
-	Field string `mapstructure:"field"`
-	Type  string `mapstructure:"type"` // asc | desc | text | geo2dsphere
-
-	// Compound index — takes precedence over Field/Type if set
-	Fields []IndexField `mapstructure:"fields"`
-
-	Sparse bool `mapstructure:"sparse"`
-	Unique bool `mapstructure:"unique"`
+	Field  string       `mapstructure:"field"`
+	Type   string       `mapstructure:"type"`
+	Fields []IndexField `mapstructure:"fields"` // compound index
+	Sparse bool         `mapstructure:"sparse"`
+	Unique bool         `mapstructure:"unique"`
 }
 
-// IndexField is one key within a compound index.
 type IndexField struct {
 	Field string `mapstructure:"field"`
-	Type  string `mapstructure:"type"` // asc | desc | text | geo2dsphere
+	Type  string `mapstructure:"type"`
 }
 
 // ─── Execution ────────────────────────────────────────────────────────────────
@@ -114,8 +116,36 @@ type ExecutionConfig struct {
 	Duration        string        `mapstructure:"duration"`
 	OperationCount  int64         `mapstructure:"operationCount"`
 	Threads         int           `mapstructure:"threads"`
-	TargetOpsPerSec int           `mapstructure:"targetOpsPerSec"`
+	TargetOpsPerSec int           `mapstructure:"targetOpsPerSec"` // 0 = unlimited
 	Rampup          RampupConfig  `mapstructure:"rampup"`
+
+	// Key space & distribution — mirrors YCSB -p properties
+	RecordCount     int64   `mapstructure:"recordCount"`     // key space size; 0 = use preload count
+	KeyDistribution string  `mapstructure:"keyDistribution"` // uniform | zipfian | latest | sequential
+	ZipfianConstant float64 `mapstructure:"zipfianConstant"` // default 0.99
+	KeyPrefix       string  `mapstructure:"keyPrefix"`       // default "user"
+	KeyZeroPadding  int     `mapstructure:"keyZeroPadding"`  // 0 = no padding; YCSB default = 0
+	InsertOrdering  string  `mapstructure:"insertOrdering"`  // ordered | hashed (default ordered)
+}
+
+func (e *ExecutionConfig) ParseDuration() (time.Duration, error) {
+	return time.ParseDuration(e.Duration)
+}
+
+// EffectiveKeyPrefix returns the configured prefix or the default "user".
+func (e *ExecutionConfig) EffectiveKeyPrefix() string {
+	if e.KeyPrefix == "" {
+		return "user"
+	}
+	return e.KeyPrefix
+}
+
+// EffectiveZipfianConstant returns the configured constant or the YCSB default.
+func (e *ExecutionConfig) EffectiveZipfianConstant() float64 {
+	if e.ZipfianConstant == 0 {
+		return 0.99
+	}
+	return e.ZipfianConstant
 }
 
 type RampupConfig struct {
@@ -123,10 +153,6 @@ type RampupConfig struct {
 	MaxThreads     int    `mapstructure:"maxThreads"`
 	StepSize       int    `mapstructure:"stepSize"`
 	StepDuration   string `mapstructure:"stepDuration"`
-}
-
-func (e *ExecutionConfig) ParseDuration() (time.Duration, error) {
-	return time.ParseDuration(e.Duration)
 }
 
 func (r *RampupConfig) ParseStepDuration() (time.Duration, error) {
@@ -142,7 +168,7 @@ type PhasesConfig struct {
 
 type PreloadConfig struct {
 	Enabled       bool  `mapstructure:"enabled"`
-	SkipIfExists  bool  `mapstructure:"skipIfExists"` // skip if collection has data
+	SkipIfExists  bool  `mapstructure:"skipIfExists"`
 	DocumentCount int64 `mapstructure:"documentCount"`
 	Threads       int   `mapstructure:"threads"`
 }
@@ -157,15 +183,12 @@ type WarmupConfig struct {
 type ScheduleConfig struct {
 	Enabled bool   `mapstructure:"enabled"`
 	Cron    string `mapstructure:"cron"`
-
-	// Bounding — all optional, first limit hit wins
-	StartAt string `mapstructure:"startAt"` // RFC3339 timestamp
-	StopAt  string `mapstructure:"stopAt"`  // RFC3339 timestamp
-	RunFor  string `mapstructure:"runFor"`  // duration e.g. "600s", "2h"
-	MaxRuns int    `mapstructure:"maxRuns"` // 0 = unlimited
+	StartAt string `mapstructure:"startAt"`
+	StopAt  string `mapstructure:"stopAt"`
+	RunFor  string `mapstructure:"runFor"`
+	MaxRuns int    `mapstructure:"maxRuns"`
 }
 
-// ParseStartAt parses the StartAt field as a time.Time.
 func (s *ScheduleConfig) ParseStartAt() (time.Time, error) {
 	if s.StartAt == "" {
 		return time.Time{}, nil
@@ -173,7 +196,6 @@ func (s *ScheduleConfig) ParseStartAt() (time.Time, error) {
 	return time.Parse(time.RFC3339, s.StartAt)
 }
 
-// ParseStopAt parses the StopAt field as a time.Time.
 func (s *ScheduleConfig) ParseStopAt() (time.Time, error) {
 	if s.StopAt == "" {
 		return time.Time{}, nil
@@ -181,7 +203,6 @@ func (s *ScheduleConfig) ParseStopAt() (time.Time, error) {
 	return time.Parse(time.RFC3339, s.StopAt)
 }
 
-// ParseRunFor parses the RunFor field as a time.Duration.
 func (s *ScheduleConfig) ParseRunFor() (time.Duration, error) {
 	if s.RunFor == "" {
 		return 0, nil
@@ -189,7 +210,7 @@ func (s *ScheduleConfig) ParseRunFor() (time.Duration, error) {
 	return time.ParseDuration(s.RunFor)
 }
 
-// ─── Results storage ──────────────────────────────────────────────────────────
+// ─── Results ──────────────────────────────────────────────────────────────────
 
 type ResultsConfig struct {
 	MongoDB MongoResultsConfig `mapstructure:"mongodb"`

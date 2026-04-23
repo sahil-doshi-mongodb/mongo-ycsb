@@ -10,7 +10,6 @@ import (
 )
 
 // Recorder is the interface all metric backends must satisfy.
-// Identical to Step 2 — worker and pool packages need no changes.
 type Recorder interface {
 	Record(op workloads.OpType, latency time.Duration, err error)
 	Snapshot() Snapshot
@@ -26,15 +25,16 @@ type Snapshot struct {
 }
 
 // OpSnapshot holds per-operation stats with full HDR percentiles.
-// TotalLatMs is removed — mean is now computed directly from the histogram.
 type OpSnapshot struct {
-	Count  int64
-	Errors int64
-	MeanMs float64
-	P50Ms  float64
-	P95Ms  float64
-	P99Ms  float64
-	P999Ms float64
+	Count    int64
+	Errors   int64
+	MeanMs   float64
+	P50Ms    float64
+	P95Ms    float64
+	P99Ms    float64
+	P999Ms   float64
+	P9999Ms  float64 // p99.99 — matches original YCSB output
+	P99999Ms float64 // p99.999 — matches original YCSB output
 }
 
 // DeltaPoint is a per-interval time-series sample captured during a run.
@@ -48,7 +48,7 @@ type DeltaPoint struct {
 // ── HdrRecorder ───────────────────────────────────────────────────────────────
 
 // HdrRecorder records latencies using HDR histograms for accurate percentiles.
-// Latencies are stored in microseconds internally and converted to ms in Snapshot.
+// Latencies stored in microseconds internally, reported in milliseconds.
 // Safe for concurrent use.
 type HdrRecorder struct {
 	mu        sync.Mutex
@@ -58,7 +58,6 @@ type HdrRecorder struct {
 	totalErrs atomic.Int64
 	startTime time.Time
 
-	// Delta state — protected by deltasMu.
 	deltasMu sync.Mutex
 	deltas   []DeltaPoint
 	lastOps  int64
@@ -81,13 +80,13 @@ func (r *HdrRecorder) Record(op workloads.OpType, latency time.Duration, err err
 	key := string(op)
 	us := latency.Microseconds()
 	if us < 1 {
-		us = 1 // HDR histogram requires value ≥ minValue
+		us = 1
 	}
 
 	r.mu.Lock()
 	h, ok := r.hists[key]
 	if !ok {
-		// Range: 1µs → 60s, 3 significant figures of precision
+		// 1µs → 60s, 3 significant figures
 		h = hdrhistogram.New(1, 60_000_000, 3)
 		r.hists[key] = h
 	}
@@ -119,16 +118,18 @@ func (r *HdrRecorder) Snapshot() Snapshot {
 		count := h.TotalCount()
 		mean := 0.0
 		if count > 0 {
-			mean = h.Mean() / 1000.0 // µs → ms
+			mean = h.Mean() / 1000.0
 		}
 		snap.ByOperation[k] = OpSnapshot{
-			Count:  count,
-			Errors: r.opErrs[k],
-			MeanMs: mean,
-			P50Ms:  float64(h.ValueAtQuantile(50)) / 1000.0,
-			P95Ms:  float64(h.ValueAtQuantile(95)) / 1000.0,
-			P99Ms:  float64(h.ValueAtQuantile(99)) / 1000.0,
-			P999Ms: float64(h.ValueAtQuantile(99.9)) / 1000.0,
+			Count:    count,
+			Errors:   r.opErrs[k],
+			MeanMs:   mean,
+			P50Ms:    float64(h.ValueAtQuantile(50)) / 1000.0,
+			P95Ms:    float64(h.ValueAtQuantile(95)) / 1000.0,
+			P99Ms:    float64(h.ValueAtQuantile(99)) / 1000.0,
+			P999Ms:   float64(h.ValueAtQuantile(99.9)) / 1000.0,
+			P9999Ms:  float64(h.ValueAtQuantile(99.99)) / 1000.0,
+			P99999Ms: float64(h.ValueAtQuantile(99.999)) / 1000.0,
 		}
 	}
 
@@ -145,8 +146,7 @@ func (r *HdrRecorder) Reset() {
 	r.totalErrs.Store(0)
 }
 
-// RecordDelta captures a per-interval snapshot for time-series analysis.
-// Called by the Ticker at each tick.
+// RecordDelta captures a per-interval snapshot for time-series storage.
 func (r *HdrRecorder) RecordDelta() {
 	now := time.Now()
 	snap := r.Snapshot()
@@ -167,9 +167,12 @@ func (r *HdrRecorder) RecordDelta() {
 		errRate = float64(snap.TotalErrors) / float64(snap.TotalOps) * 100
 	}
 
-	// Use the highest p99 across all operation types
 	p99 := 0.0
-	for _, op := range snap.ByOperation {
+	for k, op := range snap.ByOperation {
+		// Exclude scan_per_record from aggregate p99 — it's a derived metric
+		if k == string(workloads.OpScanPerRecord) {
+			continue
+		}
 		if op.P99Ms > p99 {
 			p99 = op.P99Ms
 		}

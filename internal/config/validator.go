@@ -2,7 +2,6 @@ package config
 
 import "fmt"
 
-// Validate checks all fields and returns a slice of errors (empty = valid).
 func (c *Config) Validate() []error {
 	var errs []error
 
@@ -45,6 +44,18 @@ func (c *Config) Validate() []error {
 		}
 	}
 
+	// Scan config
+	if c.Workload.Scan.MinLength < 0 {
+		errs = append(errs, fmt.Errorf("workload.scan.minLength must be >= 0"))
+	}
+	if c.Workload.Scan.MaxLength > 0 && c.Workload.Scan.MaxLength < c.Workload.Scan.MinLength {
+		errs = append(errs, fmt.Errorf("workload.scan.maxLength must be >= minLength"))
+	}
+	validScanDist := map[string]bool{"": true, "uniform": true, "zipfian": true}
+	if !validScanDist[c.Workload.Scan.Distribution] {
+		errs = append(errs, fmt.Errorf("workload.scan.distribution must be uniform or zipfian"))
+	}
+
 	// ── Execution ───────────────────────────────────────────────────────────
 	validModes := map[ExecutionMode]bool{
 		ModeTime: true, ModeOps: true, ModeRampup: true,
@@ -79,6 +90,25 @@ func (c *Config) Validate() []error {
 		}
 	}
 
+	// Key distribution
+	validDist := map[string]bool{
+		"": true, "uniform": true, "zipfian": true, "latest": true, "sequential": true,
+	}
+	if !validDist[c.Execution.KeyDistribution] {
+		errs = append(errs, fmt.Errorf(
+			"execution.keyDistribution must be one of: uniform, zipfian, latest, sequential",
+		))
+	}
+	if c.Execution.ZipfianConstant < 0 || c.Execution.ZipfianConstant >= 1 {
+		if c.Execution.ZipfianConstant != 0 { // 0 means "use default"
+			errs = append(errs, fmt.Errorf("execution.zipfianConstant must be in (0, 1)"))
+		}
+	}
+	validOrdering := map[string]bool{"": true, "ordered": true, "hashed": true}
+	if !validOrdering[c.Execution.InsertOrdering] {
+		errs = append(errs, fmt.Errorf("execution.insertOrdering must be ordered or hashed"))
+	}
+
 	// ── Phases ──────────────────────────────────────────────────────────────
 	if c.Phases.Preload.Enabled && c.Phases.Preload.DocumentCount <= 0 {
 		errs = append(errs, fmt.Errorf("phases.preload.documentCount must be > 0 when preload is enabled"))
@@ -93,7 +123,6 @@ func (c *Config) Validate() []error {
 	}
 	for i, idx := range c.Indexes {
 		if len(idx.Fields) > 0 {
-			// Compound index validation
 			for j, f := range idx.Fields {
 				if f.Field == "" {
 					errs = append(errs, fmt.Errorf("indexes[%d].fields[%d].field is required", i, j))
@@ -105,7 +134,6 @@ func (c *Config) Validate() []error {
 				}
 			}
 		} else {
-			// Single field index validation
 			if idx.Field == "" {
 				errs = append(errs, fmt.Errorf("indexes[%d].field is required", i))
 			}
@@ -124,12 +152,12 @@ func (c *Config) Validate() []error {
 		}
 		if c.Schedule.StartAt != "" {
 			if _, err := c.Schedule.ParseStartAt(); err != nil {
-				errs = append(errs, fmt.Errorf("schedule.startAt must be RFC3339 format: %w", err))
+				errs = append(errs, fmt.Errorf("schedule.startAt must be RFC3339: %w", err))
 			}
 		}
 		if c.Schedule.StopAt != "" {
 			if _, err := c.Schedule.ParseStopAt(); err != nil {
-				errs = append(errs, fmt.Errorf("schedule.stopAt must be RFC3339 format: %w", err))
+				errs = append(errs, fmt.Errorf("schedule.stopAt must be RFC3339: %w", err))
 			}
 		}
 		if c.Schedule.RunFor != "" {

@@ -15,6 +15,8 @@ import (
 	"github.com/yourusername/mongo-ycsb/internal/reporter"
 	"github.com/yourusername/mongo-ycsb/internal/worker"
 	"github.com/yourusername/mongo-ycsb/internal/workloads"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
 	"go.uber.org/zap"
 )
 
@@ -55,8 +57,8 @@ func (o *Orchestrator) Run(ctx context.Context) (*models.RunResult, error) {
 		Database(o.cfg.Connection.Database).
 		Collection(o.cfg.Connection.Collection)
 
-	// ── 2. Generator seed ────────────────────────────────────────────────────
-	gen := datagen.New(&o.cfg.DocumentShape, 0)
+	// ── 2. Preload / skip-preload ────────────────────────────────────────────
+	var startingCount int64
 
 	if o.skipPreload {
 		fmt.Printf("⏭️  Skipping preload — using existing collection data\n")
@@ -64,7 +66,7 @@ func (o *Orchestrator) Run(ctx context.Context) (*models.RunResult, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to count existing documents: %w", err)
 		}
-		gen = datagen.New(&o.cfg.DocumentShape, count)
+		startingCount = count
 		fmt.Printf("   ↳ Found %d existing documents\n\n", count)
 	} else {
 		preloadClient, err := db.NewPreloadClient(ctx, &o.cfg.Connection)
@@ -75,7 +77,14 @@ func (o *Orchestrator) Run(ctx context.Context) (*models.RunResult, error) {
 			Database(o.cfg.Connection.Database).
 			Collection(o.cfg.Connection.Collection)
 
-		ldr := loader.New(&o.cfg.Phases, preloadColl, gen, o.log)
+		// Build a temporary generator for preload phase (no distribution needed)
+		preloadGen := datagen.New(
+			&o.cfg.DocumentShape,
+			&o.cfg.Execution,
+			&o.cfg.Workload,
+			0,
+		)
+		ldr := loader.New(&o.cfg.Phases, preloadColl, preloadGen, o.log)
 
 		if err := ldr.Preload(ctx); err != nil {
 			_ = preloadClient.Disconnect(ctx)
@@ -89,17 +98,26 @@ func (o *Orchestrator) Run(ctx context.Context) (*models.RunResult, error) {
 		}
 		_ = preloadClient.Disconnect(ctx)
 
-		gen = datagen.New(&o.cfg.DocumentShape, o.cfg.Phases.Preload.DocumentCount)
+		startingCount = o.cfg.Phases.Preload.DocumentCount
 		fmt.Printf("✅ Indexes ready\n\n")
 	}
 
-	// ── 3. Workload selector ─────────────────────────────────────────────────
+	// ── 3. Generator with distribution ──────────────────────────────────────
+	// Created AFTER preload so recordCount is known and Zipfian can be initialised.
+	gen := datagen.New(
+		&o.cfg.DocumentShape,
+		&o.cfg.Execution,
+		&o.cfg.Workload,
+		startingCount,
+	)
+
+	// ── 4. Workload selector ─────────────────────────────────────────────────
 	selector, err := workloads.NewSelector(&o.cfg.Workload)
 	if err != nil {
 		return nil, err
 	}
 
-	// ── 4. Warmup — recorder is reset after so warmup ops don't pollute data ─
+	// ── 5. Warmup ───────────────────────────────────────────────────────────
 	if o.cfg.Phases.Warmup.Enabled {
 		warmupDur, err := time.ParseDuration(o.cfg.Phases.Warmup.Duration)
 		if err != nil {
@@ -113,21 +131,28 @@ func (o *Orchestrator) Run(ctx context.Context) (*models.RunResult, error) {
 
 		warmupCtx, cancel := context.WithTimeout(ctx, warmupDur)
 		warmupPool := worker.NewPool(
-			&warmupExecCfg, benchColl, selector, gen,
-			metrics.NewHdrRecorder(), // separate recorder — discarded
+			&warmupExecCfg,
+			&o.cfg.Workload,
+			benchColl,
+			selector,
+			gen,
+			metrics.NewHdrRecorder(),
 			o.log,
 		)
 		_ = warmupPool.Run(warmupCtx)
 		cancel()
 	}
 
-	// ── 5. Benchmark ─────────────────────────────────────────────────────────
-	// Fresh recorder after warmup — histogram starts clean.
-	recorder := metrics.NewHdrRecorder()
+	// ── 6. Capture server opcounters before benchmark ────────────────────────
+	statsBefore, err := captureOpcounters(ctx, benchClient)
+	if err != nil {
+		o.log.Warn("failed to capture pre-benchmark server stats", zap.Error(err))
+	}
 
+	// ── 7. Benchmark ─────────────────────────────────────────────────────────
+	recorder := metrics.NewHdrRecorder()
 	sampler := metrics.NewSystemSampler(o.cfg.Reporting.Console.RefreshIntervalMs)
 	sampler.Start()
-
 	ticker := metrics.NewTicker(
 		recorder,
 		o.cfg.Reporting.Console.RefreshIntervalMs,
@@ -135,11 +160,26 @@ func (o *Orchestrator) Run(ctx context.Context) (*models.RunResult, error) {
 	)
 	ticker.Start()
 
-	fmt.Printf("🚀 Benchmark running — workload %s | %d threads | mode: %s\n",
-		o.cfg.Workload.Type, o.cfg.Execution.Threads, o.cfg.Execution.Mode)
+	dist := o.cfg.Execution.KeyDistribution
+	if dist == "" {
+		dist = "uniform"
+	}
+	fmt.Printf("🚀 Benchmark running — workload %s | %d threads | mode: %s | distribution: %s\n",
+		o.cfg.Workload.Type, o.cfg.Execution.Threads, o.cfg.Execution.Mode, dist)
+	if o.cfg.Execution.TargetOpsPerSec > 0 {
+		fmt.Printf("   Target: %d ops/sec\n", o.cfg.Execution.TargetOpsPerSec)
+	}
 
 	start := time.Now()
-	pool := worker.NewPool(&o.cfg.Execution, benchColl, selector, gen, recorder, o.log)
+	pool := worker.NewPool(
+		&o.cfg.Execution,
+		&o.cfg.Workload,
+		benchColl,
+		selector,
+		gen,
+		recorder,
+		o.log,
+	)
 	if err := pool.Run(ctx); err != nil {
 		ticker.Stop()
 		sampler.Stop()
@@ -150,7 +190,13 @@ func (o *Orchestrator) Run(ctx context.Context) (*models.RunResult, error) {
 	ticker.Stop()
 	sampler.Stop()
 
-	// ── 6. Build result ──────────────────────────────────────────────────────
+	// ── 8. Capture server opcounters after benchmark ─────────────────────────
+	statsAfter, err := captureOpcounters(ctx, benchClient)
+	if err != nil {
+		o.log.Warn("failed to capture post-benchmark server stats", zap.Error(err))
+	}
+
+	// ── 9. Build result ──────────────────────────────────────────────────────
 	snap := recorder.Snapshot()
 
 	metricDeltas := recorder.Deltas()
@@ -174,6 +220,24 @@ func (o *Orchestrator) Run(ctx context.Context) (*models.RunResult, error) {
 		}
 	}
 
+	// Build server stats delta
+	var serverStats *models.ServerStats
+	if statsBefore != nil && statsAfter != nil {
+		serverStats = &models.ServerStats{
+			Before:     *statsBefore,
+			After:      *statsAfter,
+			CapturedAt: time.Now().UTC(),
+			Delta: models.OpcounterSnapshot{
+				Insert:  statsAfter.Insert - statsBefore.Insert,
+				Query:   statsAfter.Query - statsBefore.Query,
+				Update:  statsAfter.Update - statsBefore.Update,
+				Delete:  statsAfter.Delete - statsBefore.Delete,
+				GetMore: statsAfter.GetMore - statsBefore.GetMore,
+				Command: statsAfter.Command - statsBefore.Command,
+			},
+		}
+	}
+
 	result := &models.RunResult{
 		RunID:         o.runID,
 		Timestamp:     time.Now().UTC(),
@@ -181,6 +245,7 @@ func (o *Orchestrator) Run(ctx context.Context) (*models.RunResult, error) {
 		Config:        models.FromConfig(o.cfg),
 		Delta:         modelDeltas,
 		SystemSamples: modelSysSamples,
+		ServerStats:   serverStats,
 		Summary: models.RunSummary{
 			DurationSeconds: elapsed.Seconds(),
 			TotalOps:        snap.TotalOps,
@@ -192,7 +257,7 @@ func (o *Orchestrator) Run(ctx context.Context) (*models.RunResult, error) {
 
 	printSummary(result)
 
-	// ── 7. Persist & report ──────────────────────────────────────────────────
+	// ── 10. Persist & report ─────────────────────────────────────────────────
 	fmt.Printf("\n📤 Saving results...\n")
 
 	mongoRep := reporter.NewMongoReporter(&o.cfg.Results.MongoDB)
@@ -216,38 +281,82 @@ func (o *Orchestrator) Run(ctx context.Context) (*models.RunResult, error) {
 	return result, nil
 }
 
+// ── Server opcounter capture ──────────────────────────────────────────────────
+
+// captureOpcounters reads db.serverStatus().opcounters from the server.
+// This is used to verify that both clusters received equal workload volumes —
+// the root cause of Zepto's Round 1 failure where v8 received 4× more queries.
+func captureOpcounters(ctx context.Context, client *mongo.Client) (*models.OpcounterSnapshot, error) {
+	result := client.Database("admin").RunCommand(ctx, bson.D{{Key: "serverStatus", Value: 1}})
+	if result.Err() != nil {
+		return nil, result.Err()
+	}
+
+	var status struct {
+		Opcounters struct {
+			Insert  int64 `bson:"insert"`
+			Query   int64 `bson:"query"`
+			Update  int64 `bson:"update"`
+			Delete  int64 `bson:"delete"`
+			GetMore int64 `bson:"getmore"`
+			Command int64 `bson:"command"`
+		} `bson:"opcounters"`
+	}
+
+	if err := result.Decode(&status); err != nil {
+		return nil, err
+	}
+
+	return &models.OpcounterSnapshot{
+		Insert:  status.Opcounters.Insert,
+		Query:   status.Opcounters.Query,
+		Update:  status.Opcounters.Update,
+		Delete:  status.Opcounters.Delete,
+		GetMore: status.Opcounters.GetMore,
+		Command: status.Opcounters.Command,
+	}, nil
+}
+
+// ── Result building ───────────────────────────────────────────────────────────
+
 func buildOpMetrics(snap metrics.Snapshot) map[string]models.OpMetric {
 	out := make(map[string]models.OpMetric, len(snap.ByOperation))
 	for k, v := range snap.ByOperation {
 		out[k] = models.OpMetric{
-			Count:  v.Count,
-			Errors: v.Errors,
-			MeanMs: v.MeanMs,
-			P50Ms:  v.P50Ms,
-			P95Ms:  v.P95Ms,
-			P99Ms:  v.P99Ms,
-			P999Ms: v.P999Ms,
+			Count:    v.Count,
+			Errors:   v.Errors,
+			MeanMs:   v.MeanMs,
+			P50Ms:    v.P50Ms,
+			P95Ms:    v.P95Ms,
+			P99Ms:    v.P99Ms,
+			P999Ms:   v.P999Ms,
+			P9999Ms:  v.P9999Ms,
+			P99999Ms: v.P99999Ms,
 		}
 	}
 	return out
 }
 
 func printSummary(r *models.RunResult) {
-	fmt.Printf("\n──────────────────────────────────────────────────────────────────────────\n")
+	fmt.Printf("\n──────────────────────────────────────────────────────────────────────────────────────\n")
 	fmt.Printf("✅ Benchmark Complete\n")
-	fmt.Printf("   Run ID      : %s\n", r.RunID)
-	fmt.Printf("   Duration    : %.2fs\n", r.Summary.DurationSeconds)
-	fmt.Printf("   Total Ops   : %d\n", r.Summary.TotalOps)
-	fmt.Printf("   Errors      : %d\n", r.Summary.TotalErrors)
-	fmt.Printf("   Throughput  : %.0f ops/sec\n\n", r.Summary.OpsPerSec)
+	fmt.Printf("   Run ID           : %s\n", r.RunID)
+	fmt.Printf("   Duration         : %.2fs\n", r.Summary.DurationSeconds)
+	fmt.Printf("   Total Ops        : %d\n", r.Summary.TotalOps)
+	fmt.Printf("   Errors           : %d\n", r.Summary.TotalErrors)
+	fmt.Printf("   Throughput       : %.0f ops/sec\n", r.Summary.OpsPerSec)
+	fmt.Printf("   Key Distribution : %s\n\n", r.Config.KeyDistribution)
 
-	fmt.Printf("   %-18s %8s %8s %8s %8s %8s %8s %8s\n",
-		"Operation", "Count", "Errors", "Mean ms", "p50 ms", "p95 ms", "p99 ms", "p999 ms")
-	fmt.Printf("   %-18s %8s %8s %8s %8s %8s %8s %8s\n",
-		"─────────", "─────", "──────", "───────", "──────", "──────", "──────", "───────")
+	fmt.Printf("   %-18s %8s %8s %8s %8s %8s %8s %9s %10s\n",
+		"Operation", "Count", "Errors", "Mean ms",
+		"p50 ms", "p99 ms", "p999 ms", "p9999 ms", "p99999 ms")
+	fmt.Printf("   %-18s %8s %8s %8s %8s %8s %8s %9s %10s\n",
+		"─────────", "─────", "──────", "───────",
+		"──────", "──────", "───────", "────────", "─────────")
 	for op, m := range r.Summary.ByOperation {
-		fmt.Printf("   %-18s %8d %8d %8.2f %8.2f %8.2f %8.2f %8.2f\n",
-			op, m.Count, m.Errors, m.MeanMs, m.P50Ms, m.P95Ms, m.P99Ms, m.P999Ms)
+		fmt.Printf("   %-18s %8d %8d %8.2f %8.2f %8.2f %8.2f %9.2f %10.2f\n",
+			op, m.Count, m.Errors, m.MeanMs,
+			m.P50Ms, m.P99Ms, m.P999Ms, m.P9999Ms, m.P99999Ms)
 	}
 
 	if len(r.SystemSamples) > 0 {
@@ -258,8 +367,16 @@ func printSummary(r *models.RunResult) {
 				peakMem = s.MemoryMB
 			}
 		}
-		fmt.Printf("\n   Avg CPU  : %.1f%%\n", totalCPU/float64(len(r.SystemSamples)))
-		fmt.Printf("   Peak Mem : %.0f MB\n", peakMem)
+		fmt.Printf("\n   Avg CPU          : %.1f%%\n", totalCPU/float64(len(r.SystemSamples)))
+		fmt.Printf("   Peak Memory      : %.0f MB\n", peakMem)
 	}
-	fmt.Printf("──────────────────────────────────────────────────────────────────────────\n")
+
+	if r.ServerStats != nil {
+		d := r.ServerStats.Delta
+		fmt.Printf("\n   Server Opcounters (delta during benchmark):\n")
+		fmt.Printf("   %-10s  insert=%-10d  query=%-10d  update=%-10d  delete=%-10d\n",
+			"", d.Insert, d.Query, d.Update, d.Delete)
+	}
+
+	fmt.Printf("──────────────────────────────────────────────────────────────────────────────────────\n")
 }

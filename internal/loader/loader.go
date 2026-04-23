@@ -17,7 +17,6 @@ import (
 
 const batchSize = 100
 
-// Loader handles the setup and preload phases.
 type Loader struct {
 	cfg  *config.PhasesConfig
 	coll *mongo.Collection
@@ -25,26 +24,22 @@ type Loader struct {
 	log  *zap.Logger
 }
 
-// New creates a Loader.
 func New(cfg *config.PhasesConfig, coll *mongo.Collection, gen *datagen.Generator, log *zap.Logger) *Loader {
 	return &Loader{cfg: cfg, coll: coll, gen: gen, log: log}
 }
 
-// Preload drops the collection and bulk-inserts N documents using multiple goroutines.
 func (l *Loader) Preload(ctx context.Context) error {
 	if !l.cfg.Preload.Enabled {
 		return nil
 	}
 
-	// skipIfExists — count docs and skip if already populated
 	if l.cfg.Preload.SkipIfExists {
 		count, err := l.coll.EstimatedDocumentCount(ctx)
 		if err != nil {
 			return fmt.Errorf("failed to count documents: %w", err)
 		}
 		if count > 0 {
-			l.log.Info("preload skipped — collection already has data",
-				zap.Int64("existing_docs", count))
+			l.log.Info("preload skipped — collection already has data", zap.Int64("existing_docs", count))
 			fmt.Printf("⏭️  Preload skipped — collection already has %d documents\n\n", count)
 			return nil
 		}
@@ -113,7 +108,6 @@ func (l *Loader) Preload(ctx context.Context) error {
 	return nil
 }
 
-// insertN inserts n documents in batches and returns the total inserted.
 func (l *Loader) insertN(ctx context.Context, n int64, rng *rand.Rand, faker *gofakeit.Faker) (int64, error) {
 	var inserted int64
 	for inserted < n {
@@ -123,46 +117,43 @@ func (l *Loader) insertN(ctx context.Context, n int64, rng *rand.Rand, faker *go
 		}
 		docs := make([]interface{}, batch)
 		for i := int64(0); i < batch; i++ {
-			key := l.gen.NextInsertKey()
+			// Use ReserveInsertKey + AcknowledgeInsert pattern
+			key := l.gen.ReserveInsertKey()
 			docs[i] = l.gen.BuildDocument(key, rng, faker)
 		}
 		opts := options.InsertMany().SetOrdered(false)
 		if _, err := l.coll.InsertMany(ctx, docs, opts); err != nil {
 			return inserted, err
 		}
+		// Acknowledge all inserts in the batch
+		for i := int64(0); i < batch; i++ {
+			l.gen.AcknowledgeInsert()
+		}
 		inserted += batch
 	}
 	return inserted, nil
 }
 
-// CreateIndexes supports both single-field and compound indexes.
 func (l *Loader) CreateIndexes(ctx context.Context, indexes []config.IndexConfig) error {
 	if len(indexes) == 0 {
 		return nil
 	}
-
 	models := make([]mongo.IndexModel, 0, len(indexes))
 	for _, idx := range indexes {
 		var key bson.D
-
 		if len(idx.Fields) > 0 {
-			// Compound index — build multi-key bson.D
 			for _, f := range idx.Fields {
 				key = append(key, bson.E{Key: f.Field, Value: indexValue(f.Type)})
 			}
 		} else {
-			// Single field index
 			key = bson.D{{Key: idx.Field, Value: indexValue(idx.Type)}}
 		}
-
 		opts := options.Index().SetSparse(idx.Sparse).SetUnique(idx.Unique)
 		models = append(models, mongo.IndexModel{Keys: key, Options: opts})
 	}
-
 	if _, err := l.coll.Indexes().CreateMany(ctx, models); err != nil {
 		return fmt.Errorf("create indexes: %w", err)
 	}
-
 	l.log.Info("indexes created", zap.Int("count", len(models)))
 	return nil
 }

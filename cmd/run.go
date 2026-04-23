@@ -34,6 +34,10 @@ func init() {
 func runBenchmark(cmd *cobra.Command, args []string) error {
 	applyRunOverrides(cmd)
 
+	// Set package-level flag so printConfigSummary can read it without
+	// referencing runCmd directly (avoids initialisation cycle).
+	skipPreloadFlag, _ = cmd.Flags().GetBool("skip-preload")
+
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
@@ -55,9 +59,7 @@ func runBenchmark(cmd *cobra.Command, args []string) error {
 	}
 	defer log.Sync()
 
-	skipPreload, _ := cmd.Flags().GetBool("skip-preload")
-
-	orch := orchestrator.New(cfg, log, skipPreload)
+	orch := orchestrator.New(cfg, log, skipPreloadFlag)
 	_, err = orch.Run(context.Background())
 	return err
 }
