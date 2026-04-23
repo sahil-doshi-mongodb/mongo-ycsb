@@ -1,7 +1,11 @@
 package config
 
-import "fmt"
+import (
+	"fmt"
+	"os"
+)
 
+// Validate checks all fields and returns a slice of errors (empty = valid).
 func (c *Config) Validate() []error {
 	var errs []error
 
@@ -99,10 +103,9 @@ func (c *Config) Validate() []error {
 			"execution.keyDistribution must be one of: uniform, zipfian, latest, sequential",
 		))
 	}
-	if c.Execution.ZipfianConstant < 0 || c.Execution.ZipfianConstant >= 1 {
-		if c.Execution.ZipfianConstant != 0 { // 0 means "use default"
-			errs = append(errs, fmt.Errorf("execution.zipfianConstant must be in (0, 1)"))
-		}
+	if c.Execution.ZipfianConstant != 0 &&
+		(c.Execution.ZipfianConstant <= 0 || c.Execution.ZipfianConstant >= 1) {
+		errs = append(errs, fmt.Errorf("execution.zipfianConstant must be in (0, 1)"))
 	}
 	validOrdering := map[string]bool{"": true, "ordered": true, "hashed": true}
 	if !validOrdering[c.Execution.InsertOrdering] {
@@ -167,18 +170,131 @@ func (c *Config) Validate() []error {
 		}
 	}
 
-	// ── Results ─────────────────────────────────────────────────────────────
+	// ── Results — MongoDB ────────────────────────────────────────────────────
+	// If enabled, validate URI, database, collection AND verify connectivity
+	// is possible by checking the URI is well-formed.
 	if c.Results.MongoDB.Enabled {
 		if c.Results.MongoDB.URI == "" {
-			errs = append(errs, fmt.Errorf("results.mongodb.uri is required when enabled"))
+			errs = append(errs, fmt.Errorf(
+				"results.mongodb.uri is required when results.mongodb.enabled is true — "+
+					"set the URI or disable results.mongodb.enabled",
+			))
+		} else if isPlaceholderURI(c.Results.MongoDB.URI) {
+			errs = append(errs, fmt.Errorf(
+				"results.mongodb.uri looks like a placeholder (%q) — "+
+					"replace it with a real MongoDB connection string or disable results.mongodb.enabled",
+				c.Results.MongoDB.URI,
+			))
 		}
 		if c.Results.MongoDB.Database == "" {
-			errs = append(errs, fmt.Errorf("results.mongodb.database is required when enabled"))
+			errs = append(errs, fmt.Errorf(
+				"results.mongodb.database is required when results.mongodb.enabled is true",
+			))
 		}
 		if c.Results.MongoDB.Collection == "" {
-			errs = append(errs, fmt.Errorf("results.mongodb.collection is required when enabled"))
+			errs = append(errs, fmt.Errorf(
+				"results.mongodb.collection is required when results.mongodb.enabled is true",
+			))
+		}
+	}
+
+	// ── Results — Local JSON ─────────────────────────────────────────────────
+	// If enabled, check the path exists and is writable. Create it if missing
+	// so a first run doesn't fail silently after the benchmark completes.
+	if c.Results.Local.Enabled {
+		if c.Results.Local.Path == "" {
+			errs = append(errs, fmt.Errorf(
+				"results.local.path is required when results.local.enabled is true",
+			))
+		} else {
+			if dirErr := ensureWritableDir(c.Results.Local.Path); dirErr != nil {
+				errs = append(errs, fmt.Errorf(
+					"results.local.path %q is not writable: %w — "+
+						"fix the path/permissions or disable results.local.enabled",
+					c.Results.Local.Path, dirErr,
+				))
+			}
+		}
+	}
+
+	// ── Reporting — HTML ─────────────────────────────────────────────────────
+	if c.Reporting.HTML.Enabled {
+		if c.Reporting.HTML.OutputPath == "" {
+			errs = append(errs, fmt.Errorf(
+				"reporting.html.outputPath is required when reporting.html.enabled is true",
+			))
+		} else {
+			if dirErr := ensureWritableDir(c.Reporting.HTML.OutputPath); dirErr != nil {
+				errs = append(errs, fmt.Errorf(
+					"reporting.html.outputPath %q is not writable: %w — "+
+						"fix the path/permissions or disable reporting.html.enabled",
+					c.Reporting.HTML.OutputPath, dirErr,
+				))
+			}
+		}
+	}
+
+	// ── Reporting — CSV ──────────────────────────────────────────────────────
+	if c.Reporting.CSV.Enabled {
+		if c.Reporting.CSV.OutputPath == "" {
+			errs = append(errs, fmt.Errorf(
+				"reporting.csv.outputPath is required when reporting.csv.enabled is true",
+			))
+		} else {
+			if dirErr := ensureWritableDir(c.Reporting.CSV.OutputPath); dirErr != nil {
+				errs = append(errs, fmt.Errorf(
+					"reporting.csv.outputPath %q is not writable: %w — "+
+						"fix the path/permissions or disable reporting.csv.enabled",
+					c.Reporting.CSV.OutputPath, dirErr,
+				))
+			}
 		}
 	}
 
 	return errs
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+// ensureWritableDir creates the directory if it doesn't exist, then verifies
+// the process can write to it by creating and removing a temp file.
+// This catches permission issues before the benchmark runs rather than after.
+func ensureWritableDir(path string) error {
+	// Create directory (and all parents) if it doesn't exist
+	if err := os.MkdirAll(path, 0755); err != nil {
+		return fmt.Errorf("cannot create directory: %w", err)
+	}
+
+	// Verify write access by creating a temp probe file
+	probe, err := os.CreateTemp(path, ".mongo-ycsb-probe-*")
+	if err != nil {
+		return fmt.Errorf("directory exists but is not writable: %w", err)
+	}
+	probe.Close()
+	os.Remove(probe.Name())
+
+	return nil
+}
+
+// isPlaceholderURI returns true if the URI still contains template placeholders
+// that a user forgot to replace — catches the most common config mistake.
+func isPlaceholderURI(uri string) bool {
+	placeholders := []string{
+		"<user>", "<password>", "<cluster>", "<host>",
+		"<username>", "<your-cluster>", "example.com",
+	}
+	for _, p := range placeholders {
+		for _, c := range uri {
+			_ = c
+			break
+		}
+		if len(uri) >= len(p) {
+			for i := 0; i <= len(uri)-len(p); i++ {
+				if uri[i:i+len(p)] == p {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
