@@ -3,7 +3,7 @@
 # ============================================================
 
 connection:
-  uri: "mongodb+srv://mongoadmin:passwordone@consultnew.3eano.mongodb.net/"
+  uri: "mongodb://localhost:27017"
   database: "ycsb"
   collection: "usertable"
   readPreference: "primary"
