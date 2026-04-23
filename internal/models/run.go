@@ -8,24 +8,25 @@ import (
 
 // RunResult is the top-level document stored per benchmark run.
 type RunResult struct {
-	RunID     string       `bson:"run_id"    json:"run_id"`
-	Timestamp time.Time    `bson:"timestamp" json:"timestamp"`
-	Tags      []string     `bson:"tags"      json:"tags"`
-	Config    RunConfig    `bson:"config"    json:"config"`
-	Summary   RunSummary   `bson:"summary"   json:"summary"`
-	Delta     []DeltaPoint `bson:"delta"    json:"delta"` // populated in Step 3
+	RunID         string         `bson:"run_id"         json:"run_id"`
+	Timestamp     time.Time      `bson:"timestamp"      json:"timestamp"`
+	Tags          []string       `bson:"tags"           json:"tags"`
+	Config        RunConfig      `bson:"config"         json:"config"`
+	Summary       RunSummary     `bson:"summary"        json:"summary"`
+	Delta         []DeltaPoint   `bson:"delta"          json:"delta"`
+	SystemSamples []SystemSample `bson:"system_samples" json:"system_samples"`
 }
 
 // RunConfig is a snapshot of the config used for this run.
 type RunConfig struct {
-	Workload   string `bson:"workload"             json:"workload"`
-	Mode       string `bson:"mode"                 json:"mode"`
-	Threads    int    `bson:"threads"              json:"threads"`
-	Duration   string `bson:"duration,omitempty"   json:"duration,omitempty"`
-	OpCount    int64  `bson:"op_count,omitempty"   json:"op_count,omitempty"`
-	URI        string `bson:"uri"                  json:"uri"`
-	Database   string `bson:"database"             json:"database"`
-	Collection string `bson:"collection"           json:"collection"`
+	Workload   string `bson:"workload"           json:"workload"`
+	Mode       string `bson:"mode"               json:"mode"`
+	Threads    int    `bson:"threads"            json:"threads"`
+	Duration   string `bson:"duration,omitempty" json:"duration,omitempty"`
+	OpCount    int64  `bson:"op_count,omitempty" json:"op_count,omitempty"`
+	URI        string `bson:"uri"                json:"uri"`
+	Database   string `bson:"database"           json:"database"`
+	Collection string `bson:"collection"         json:"collection"`
 }
 
 // RunSummary holds the final aggregated metrics for a run.
@@ -37,8 +38,7 @@ type RunSummary struct {
 	ByOperation     map[string]OpMetric `bson:"by_operation"     json:"by_operation"`
 }
 
-// OpMetric holds per-operation-type stats.
-// P50/P95/P99/P999 are populated in Step 3 (HDR histograms).
+// OpMetric holds per-operation-type stats with full HDR percentiles.
 type OpMetric struct {
 	Count  int64   `bson:"count"   json:"count"`
 	Errors int64   `bson:"errors"  json:"errors"`
@@ -49,12 +49,19 @@ type OpMetric struct {
 	P999Ms float64 `bson:"p999_ms" json:"p999_ms"`
 }
 
-// DeltaPoint is a time-series sample captured during a run (Step 3).
+// DeltaPoint is a per-second time-series sample captured during a run.
 type DeltaPoint struct {
 	OffsetSeconds float64 `bson:"offset_seconds" json:"offset_seconds"`
 	OpsPerSec     float64 `bson:"ops_per_sec"    json:"ops_per_sec"`
 	ErrorRate     float64 `bson:"error_rate"     json:"error_rate"`
 	P99Ms         float64 `bson:"p99_ms"         json:"p99_ms"`
+}
+
+// SystemSample is a point-in-time CPU and memory reading.
+type SystemSample struct {
+	OffsetSeconds float64 `bson:"offset_seconds" json:"offset_seconds"`
+	CPUPercent    float64 `bson:"cpu_percent"    json:"cpu_percent"`
+	MemoryMB      float64 `bson:"memory_mb"      json:"memory_mb"`
 }
 
 // FromConfig builds a RunConfig snapshot from the full benchmark config.

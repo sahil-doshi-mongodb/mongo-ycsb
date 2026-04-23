@@ -1,104 +1,196 @@
 package metrics
 
-// This is a simple placeholder for Step 3, which will replace the
-// SimpleRecorder implementation with HDR histograms while keeping
-// the Recorder interface identical — no other packages need to change.
-
 import (
 	"sync"
 	"sync/atomic"
 	"time"
 
+	hdrhistogram "github.com/HdrHistogram/hdrhistogram-go"
 	"github.com/yourusername/mongo-ycsb/internal/workloads"
 )
 
 // Recorder is the interface all metric backends must satisfy.
+// Identical to Step 2 — worker and pool packages need no changes.
 type Recorder interface {
 	Record(op workloads.OpType, latency time.Duration, err error)
 	Snapshot() Snapshot
 	Reset()
 }
 
-// Snapshot is a point-in-time view of recorded metrics.
+// Snapshot is a point-in-time view of all recorded metrics.
 type Snapshot struct {
 	TotalOps    int64
 	TotalErrors int64
+	ElapsedSec  float64
 	ByOperation map[string]OpSnapshot
 }
 
-// OpSnapshot holds stats for one operation type.
-// Step 3 will extend this with accurate HDR percentiles.
+// OpSnapshot holds per-operation stats with full HDR percentiles.
+// TotalLatMs is removed — mean is now computed directly from the histogram.
 type OpSnapshot struct {
-	Count      int64
-	Errors     int64
-	TotalLatMs int64 // used to compute mean; replaced by histogram in Step 3
+	Count  int64
+	Errors int64
+	MeanMs float64
+	P50Ms  float64
+	P95Ms  float64
+	P99Ms  float64
+	P999Ms float64
 }
 
-// ── SimpleRecorder ────────────────────────────────────────────────────────────
-
-type SimpleRecorder struct {
-	mu    sync.Mutex
-	ops   map[string]*opStat
-	total atomic.Int64
-	errs  atomic.Int64
+// DeltaPoint is a per-interval time-series sample captured during a run.
+type DeltaPoint struct {
+	OffsetSeconds float64
+	OpsPerSec     float64
+	ErrorRate     float64
+	P99Ms         float64
 }
 
-type opStat struct {
-	count   int64
-	errors  int64
-	totalMs int64
+// ── HdrRecorder ───────────────────────────────────────────────────────────────
+
+// HdrRecorder records latencies using HDR histograms for accurate percentiles.
+// Latencies are stored in microseconds internally and converted to ms in Snapshot.
+// Safe for concurrent use.
+type HdrRecorder struct {
+	mu        sync.Mutex
+	hists     map[string]*hdrhistogram.Histogram
+	opErrs    map[string]int64
+	totalOps  atomic.Int64
+	totalErrs atomic.Int64
+	startTime time.Time
+
+	// Delta state — protected by deltasMu.
+	deltasMu sync.Mutex
+	deltas   []DeltaPoint
+	lastOps  int64
+	lastTime time.Time
 }
 
-func NewSimpleRecorder() *SimpleRecorder {
-	return &SimpleRecorder{ops: make(map[string]*opStat)}
+// NewHdrRecorder creates a new HDR-backed recorder ready to use.
+func NewHdrRecorder() *HdrRecorder {
+	now := time.Now()
+	return &HdrRecorder{
+		hists:     make(map[string]*hdrhistogram.Histogram),
+		opErrs:    make(map[string]int64),
+		startTime: now,
+		lastTime:  now,
+	}
 }
 
-func (r *SimpleRecorder) Record(op workloads.OpType, latency time.Duration, err error) {
+// Record records a single operation latency and optional error.
+func (r *HdrRecorder) Record(op workloads.OpType, latency time.Duration, err error) {
 	key := string(op)
-	ms := latency.Milliseconds()
+	us := latency.Microseconds()
+	if us < 1 {
+		us = 1 // HDR histogram requires value ≥ minValue
+	}
 
 	r.mu.Lock()
-	s, ok := r.ops[key]
+	h, ok := r.hists[key]
 	if !ok {
-		s = &opStat{}
-		r.ops[key] = s
+		// Range: 1µs → 60s, 3 significant figures of precision
+		h = hdrhistogram.New(1, 60_000_000, 3)
+		r.hists[key] = h
 	}
-	s.count++
-	s.totalMs += ms
+	_ = h.RecordValue(us)
 	if err != nil {
-		s.errors++
+		r.opErrs[key]++
 	}
 	r.mu.Unlock()
 
-	r.total.Add(1)
+	r.totalOps.Add(1)
 	if err != nil {
-		r.errs.Add(1)
+		r.totalErrs.Add(1)
 	}
 }
 
-func (r *SimpleRecorder) Snapshot() Snapshot {
+// Snapshot returns a point-in-time copy of all metrics.
+func (r *HdrRecorder) Snapshot() Snapshot {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	snap := Snapshot{
-		TotalOps:    r.total.Load(),
-		TotalErrors: r.errs.Load(),
-		ByOperation: make(map[string]OpSnapshot, len(r.ops)),
+		TotalOps:    r.totalOps.Load(),
+		TotalErrors: r.totalErrs.Load(),
+		ElapsedSec:  time.Since(r.startTime).Seconds(),
+		ByOperation: make(map[string]OpSnapshot, len(r.hists)),
 	}
-	for k, s := range r.ops {
+
+	for k, h := range r.hists {
+		count := h.TotalCount()
+		mean := 0.0
+		if count > 0 {
+			mean = h.Mean() / 1000.0 // µs → ms
+		}
 		snap.ByOperation[k] = OpSnapshot{
-			Count:      s.count,
-			Errors:     s.errors,
-			TotalLatMs: s.totalMs,
+			Count:  count,
+			Errors: r.opErrs[k],
+			MeanMs: mean,
+			P50Ms:  float64(h.ValueAtQuantile(50)) / 1000.0,
+			P95Ms:  float64(h.ValueAtQuantile(95)) / 1000.0,
+			P99Ms:  float64(h.ValueAtQuantile(99)) / 1000.0,
+			P999Ms: float64(h.ValueAtQuantile(99.9)) / 1000.0,
 		}
 	}
+
 	return snap
 }
 
-func (r *SimpleRecorder) Reset() {
+// Reset clears all recorded data.
+func (r *HdrRecorder) Reset() {
 	r.mu.Lock()
-	r.ops = make(map[string]*opStat)
+	r.hists = make(map[string]*hdrhistogram.Histogram)
+	r.opErrs = make(map[string]int64)
 	r.mu.Unlock()
-	r.total.Store(0)
-	r.errs.Store(0)
+	r.totalOps.Store(0)
+	r.totalErrs.Store(0)
+}
+
+// RecordDelta captures a per-interval snapshot for time-series analysis.
+// Called by the Ticker at each tick.
+func (r *HdrRecorder) RecordDelta() {
+	now := time.Now()
+	snap := r.Snapshot()
+
+	r.deltasMu.Lock()
+	defer r.deltasMu.Unlock()
+
+	intervalOps := float64(snap.TotalOps - r.lastOps)
+	intervalSec := now.Sub(r.lastTime).Seconds()
+
+	opsPerSec := 0.0
+	if intervalSec > 0 {
+		opsPerSec = intervalOps / intervalSec
+	}
+
+	errRate := 0.0
+	if snap.TotalOps > 0 {
+		errRate = float64(snap.TotalErrors) / float64(snap.TotalOps) * 100
+	}
+
+	// Use the highest p99 across all operation types
+	p99 := 0.0
+	for _, op := range snap.ByOperation {
+		if op.P99Ms > p99 {
+			p99 = op.P99Ms
+		}
+	}
+
+	r.deltas = append(r.deltas, DeltaPoint{
+		OffsetSeconds: snap.ElapsedSec,
+		OpsPerSec:     opsPerSec,
+		ErrorRate:     errRate,
+		P99Ms:         p99,
+	})
+
+	r.lastOps = snap.TotalOps
+	r.lastTime = now
+}
+
+// Deltas returns a copy of all recorded delta points.
+func (r *HdrRecorder) Deltas() []DeltaPoint {
+	r.deltasMu.Lock()
+	defer r.deltasMu.Unlock()
+	out := make([]DeltaPoint, len(r.deltas))
+	copy(out, r.deltas)
+	return out
 }
