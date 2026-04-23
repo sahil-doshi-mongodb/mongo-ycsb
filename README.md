@@ -1,4 +1,5 @@
 
+
 # mongo-ycsb
 
 A MongoDB-native YCSB-compatible benchmarking tool written in Go. Designed to produce results directly comparable to the original [Yahoo! Cloud Serving Benchmark (YCSB)](https://github.com/brianfrankcooper/YCSB) while adding significantly better observability, result storage, scheduling, and comparison capabilities — with no JVM required.
@@ -102,20 +103,23 @@ The original YCSB is a Java tool with broad database support but limited MongoDB
 ### Result Storage
 - **MongoDB collection** — full `RunResult` document with all metrics, delta, system samples, and server stats
 - **Local JSON** — `./results/<run_id>.json` — always written as a fallback
-- **CSV** — flat per-operation metrics file
+- **CSV** — flat per-operation metrics file (summary only — cannot be used for comparison)
 - **HTML report** — self-contained with Chart.js charts for throughput, p99 latency, CPU, memory
 
 ### Comparison Mode
 - Compare any two runs **by Run ID** or **by tag** (most recent run per tag)
 - Console output — side-by-side table with delta percentages
 - HTML comparison report — overlaid throughput and p99 latency charts for both runs
+- Loads from **MongoDB first**, falls back to **local JSON** automatically
+- **CSV cannot be used for comparison** — it contains summary metrics only, not the full RunResult
 
 ### Scheduling
-- CRON scheduling with four independent bounding rules (first limit hit wins):
-  - `startAt` — don't fire before this RFC3339 timestamp
-  - `stopAt` — stop firing after this RFC3339 timestamp
-  - `runFor` — stop after this total wall-clock duration (e.g. `"600s"`, `"2h"`)
-  - `maxRuns` — stop after N completed runs
+- CRON scheduling with a single active bound type (set `bounds.type`):
+  - `unlimited` — runs forever until Ctrl+C
+  - `runFor` — stops after a total wall-clock duration
+  - `maxRuns` — stops after N completed runs
+  - `timeWindow` — only fires between `startAt` and `stopAt` timestamps
+- `dry-run` shows the next 5 trigger times, window markers, and estimated run count
 
 ---
 
@@ -221,7 +225,7 @@ mongo-ycsb run --config <path> [flags]
 mongo-ycsb dry-run --config <path>
 ```
 
-Validates the full config and prints the benchmark plan — never touches MongoDB.
+Validates the full config and prints the full benchmark plan — never touches MongoDB. When scheduling is enabled, shows the next 5 trigger times and estimated run count.
 
 ### `compare` — Diff two benchmark runs
 
@@ -249,7 +253,7 @@ mongo-ycsb compare --config <path> --tag-a v7 --tag-b v8 --output both
 mongo-ycsb schedule --config <path> [--skip-preload]
 ```
 
-Reads schedule configuration from the config file. Blocks until all bounds are satisfied or the process is interrupted.
+Reads schedule configuration from the config file. Blocks until the configured bound is satisfied or the process is interrupted.
 
 ### `report` — Generate an HTML report for a completed run
 
@@ -326,6 +330,20 @@ documentShape:
 
 ### Indexes
 
+Original YCSB creates **no secondary indexes** — all queries run against the default `_id` index only. To match this behaviour exactly:
+
+```yaml
+indexes: []
+```
+
+The `dry-run` command confirms this:
+```
+Indexes : none — only default _id index
+          ↳ matches original YCSB behaviour (no secondary indexes)
+```
+
+To benchmark with secondary index overhead (e.g. before vs after adding an index):
+
 ```yaml
 # Single field index
 indexes:
@@ -344,6 +362,8 @@ indexes:
     sparse: false
     unique: false
 ```
+
+Indexes are always created **after preload** so the collection `Drop()` during preload does not wipe them.
 
 ### Execution
 
@@ -396,12 +416,34 @@ results:
     collection: "runs"
   local:
     enabled: true
-    path: "./results"             # writes <run_id>.json and <run_id>.csv
+    path: "./results"             # writes <run_id>.json
   tags:
     - "baseline"
     - "v8"
     - "m40"
 ```
+
+#### `results.tags` — What They Are and How to Use Them
+
+Tags are free-form string labels attached to every run produced by this config.
+
+**Purpose 1 — Identification**: describe what makes this run different from others. Tags appear in every result: MongoDB document, JSON file, HTML report. When you look at a result later, tags tell you what config produced it without reading the full config snapshot.
+
+**Purpose 2 — Tag-based comparison**: find runs without remembering run IDs.
+```bash
+go run main.go compare --tag-a "before-index" --tag-b "after-index"
+```
+Finds the most recent run with each tag automatically.
+
+**Purpose 3 — MongoDB filtering**: query your results collection directly.
+```js
+db.runs.find({ tags: { $all: ["v8", "zipfian", "workload-a"] } })
+db.runs.find({ tags: "v7" }).sort({ timestamp: -1 })
+```
+
+**Good tags** describe: version (`v7`, `v8`), cluster tier (`m40`, `m60`), workload (`workload-a`), distribution (`zipfian`, `uniform`), write concern (`majority`, `w1`), and state (`baseline`, `before-index`, `after-index`).
+
+**Limitation**: `--tag-a`/`--tag-b` match on a single tag string and pick the most recent run with that tag. If multiple runs share the same tag, use run IDs directly for precise targeting.
 
 ### Reporting
 
@@ -424,13 +466,31 @@ reporting:
 schedule:
   enabled: false
   cron: "0 * * * *"              # standard 5-field cron expression
-  startAt: "2026-05-01T00:00:00Z" # RFC3339 — don't fire before this time
-  stopAt:  "2026-05-07T23:59:59Z" # RFC3339 — stop after this time
-  runFor:  "600s"                 # stop after this total duration
-  maxRuns: 10                     # stop after N completed runs (0 = unlimited)
+
+  bounds:
+    # Set type to exactly ONE of: unlimited | runFor | maxRuns | timeWindow
+    # Only populate the fields for the type you choose.
+    type: "unlimited"
+
+    # Used when type: runFor — total duration from start
+    runFor: ""                    # e.g. "600s", "2h"
+
+    # Used when type: maxRuns — stop after N completed runs
+    maxRuns: 0                    # e.g. 10
+
+    # Used when type: timeWindow — both required
+    startAt: ""                   # RFC3339 e.g. "2026-05-01T00:00:00Z"
+    stopAt:  ""                   # RFC3339 e.g. "2026-05-07T23:59:59Z"
 ```
 
-All four bounds are optional. The first limit hit stops the scheduler.
+| Bound Type | Stops When |
+|---|---|
+| `unlimited` | Ctrl+C only |
+| `runFor` | Total wall-clock duration elapsed from start |
+| `maxRuns` | N runs successfully completed |
+| `timeWindow` | A trigger fires after `stopAt` timestamp |
+
+Only one `bounds.type` is active per scheduler. Setting fields for a different type than the one selected is flagged as a validation error during `dry-run`.
 
 ---
 
@@ -558,11 +618,11 @@ Full `RunResult` document stored in `ycsb_results.runs` containing all metrics, 
 
 ### JSON file
 
-`./results/<run_id>.json` — complete run result for offline analysis.
+`./results/<run_id>.json` — complete run result for offline analysis and comparison.
 
 ### CSV file
 
-`./results/<run_id>.csv` — flat per-operation metrics, one row per operation type.
+`./results/<run_id>.csv` — flat per-operation metrics, one row per operation type. Useful for importing into Excel or Google Sheets. **Cannot be used for comparison mode** — use JSON or MongoDB for that.
 
 ### HTML report
 
@@ -593,24 +653,46 @@ mongo-ycsb compare --config config.yaml \
 
 Console output shows side-by-side latency percentiles with delta percentages. HTML output generates `./reports/compare_<runA>_vs_<runB>.html` with overlaid Chart.js charts.
 
-Runs are loaded from MongoDB first, falling back to local JSON if MongoDB is unavailable.
+Runs are loaded from **MongoDB first**, falling back to **local JSON** automatically if MongoDB is unavailable or disabled. **CSV files cannot be used for comparison** — they contain summary metrics only, not the full RunResult needed for a diff.
 
 ---
 
 ## CRON Scheduling
 
-Run benchmarks automatically on a schedule:
+Run benchmarks automatically on a schedule. Configure the trigger expression and choose exactly one bound type:
 
 ```yaml
 schedule:
   enabled: true
-  cron: "*/30 * * * *"           # every 30 minutes
-  runFor: "2h"                    # for 2 hours total
-  maxRuns: 4                      # or at most 4 runs — whichever comes first
+  cron: "0 * * * *"              # trigger every hour
+
+  bounds:
+    type: "timeWindow"            # fires only within this window
+    startAt: "2026-05-01T00:00:00Z"
+    stopAt:  "2026-05-03T00:00:00Z"
 ```
 
 ```bash
 mongo-ycsb schedule --config config.yaml --skip-preload
+```
+
+The `dry-run` command shows a full schedule preview before you commit to running:
+
+```
+   ⏰ CRON Schedule
+      Expression : "0 * * * *"
+      Bound Type : timeWindow
+      Start At   : 2026-05-01T00:00:00Z
+      Stop At    : 2026-05-03T00:00:00Z
+
+      Next 5 trigger times:
+         1. 2026-04-24 19:00:00 UTC  ⏭️  (before window — will be skipped)
+         2. 2026-05-01 00:00:00 UTC  ✅
+         3. 2026-05-01 01:00:00 UTC  ✅
+         4. 2026-05-01 02:00:00 UTC  ✅
+         5. 2026-05-01 03:00:00 UTC  ✅
+
+      📊 Estimated runs in window: 48
 ```
 
 Each triggered run gets its own `run_id` and is stored independently, making it easy to track performance over time.
@@ -632,14 +714,14 @@ documentShape:
   fieldSize: 100                  # set to match -p fieldlength=N
   useRealisticData: false         # YCSB uses random bytes
 
+indexes: []                       # YCSB creates no secondary indexes
+
 execution:
   keyDistribution: "zipfian"      # YCSB default
   zipfianConstant: 0.99           # YCSB default
   recordCount: 1000000            # set to match -p recordcount=N
   keyZeroPadding: 0               # YCSB modern default
 ```
-
-A pre-built config replicating the Zepto benchmark parameters (512 threads, 2M records, 20 fields × 1000 bytes) is provided in `configs/zepto.yaml`.
 
 ---
 
