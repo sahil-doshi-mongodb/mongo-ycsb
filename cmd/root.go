@@ -41,6 +41,7 @@ func init() {
 	rootCmd.AddCommand(dryRunCmd)
 	rootCmd.AddCommand(compareCmd)
 	rootCmd.AddCommand(reportCmd)
+	rootCmd.AddCommand(scheduleCmd)
 }
 
 // initConfig is called by PersistentPreRunE — flags are guaranteed to be
