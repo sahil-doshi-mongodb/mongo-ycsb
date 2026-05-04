@@ -21,20 +21,12 @@ type Generator struct {
 	execCfg     *config.ExecutionConfig
 	workloadCfg *config.WorkloadConfig
 
-	// Key counters — atomic for lock-free concurrent access.
-	// nextKey:      monotonically increasing reservation counter
-	// insertedDocs: count of *acknowledged* inserts (safe for reads to target)
 	nextKey      atomic.Int64
 	insertedDocs atomic.Int64
+	seqCounter   atomic.Int64
 
-	// Sequential key counter (used when keyDistribution=sequential)
-	seqCounter atomic.Int64
-
-	// Zipfian generator — created once at init if distribution=zipfian
-	zipf *distribution.ScrambledZipfian
-
-	// recordCount is the fixed key space for Zipfian sampling.
-	// For Latest/Uniform it uses the live insertedDocs count instead.
+	zipf        *distribution.ScrambledZipfian // Zipfian distribution
+	latestZipf  *distribution.ScrambledZipfian // Latest distribution (Workload D)
 	recordCount int64
 }
 
@@ -67,6 +59,16 @@ func New(
 			g.recordCount, execCfg.EffectiveZipfianConstant())
 		g.zipf = distribution.NewScrambledZipfian(g.recordCount, execCfg.EffectiveZipfianConstant())
 		fmt.Printf("   ✅ Zipfian ready\n\n")
+	}
+
+	if execCfg.KeyDistribution == "latest" && g.recordCount > 0 {
+		// Matches YCSB's SkewedLatestGenerator — Zipfian offset subtracted
+		// from the most recently inserted key. Initialised with recordCount
+		// as n; clamped to actual insertedCount at query time.
+		fmt.Printf("📐 Initialising Latest distribution (n=%d, θ=%.3f)...\n",
+			g.recordCount, execCfg.EffectiveZipfianConstant())
+		g.latestZipf = distribution.NewScrambledZipfian(g.recordCount, execCfg.EffectiveZipfianConstant())
+		fmt.Printf("   ✅ Latest ready\n\n")
 	}
 
 	return g
@@ -117,8 +119,13 @@ func (g *Generator) NextExistingKey(rng *rand.Rand) string {
 			idx = rng.Int63n(count)
 		}
 	case "latest":
-		// Exponentially biased toward recently inserted keys — Workload D
-		idx = distribution.NextLatest(rng, count)
+		// Zipfian offset from most recently inserted key — matches YCSB SkewedLatestGenerator
+		if g.latestZipf != nil {
+			idx = distribution.NextLatest(rng, count, g.latestZipf)
+		} else {
+			// Fallback if generator wasn't initialised (e.g. recordCount was 0 at init time)
+			idx = rng.Int63n(count)
+		}
 	case "sequential":
 		// Rotate sequentially through all existing keys
 		n := g.seqCounter.Add(1) - 1

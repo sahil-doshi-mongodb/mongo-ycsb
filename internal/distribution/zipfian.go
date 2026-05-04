@@ -80,22 +80,23 @@ func (z *zipfian) next(rng *rand.Rand) int64 {
 	return ret
 }
 
-// ── Latest distribution ───────────────────────────────────────────────────────
-
-// NextLatest returns a key index biased toward recently inserted keys using
-// an exponential distribution. Matches YCSB's SkewedLatestGenerator.
-// Used by Workload D.
-func NextLatest(rng *rand.Rand, insertedCount int64) int64 {
+// NextLatest returns a key index biased toward recently inserted keys,
+// matching YCSB's SkewedLatestGenerator exactly.
+// YCSB generates a Zipfian offset and subtracts it from the most recently
+// inserted key index — so the most recent key gets the highest probability,
+// with a power-law decay toward older keys.
+func NextLatest(rng *rand.Rand, insertedCount int64, zipf *ScrambledZipfian) int64 {
 	if insertedCount <= 0 {
 		return 0
 	}
-	u := rng.Float64()
-	if u >= 1.0 {
-		u = 0.9999999
+	// Generate a Zipfian offset in [0, insertedCount)
+	// Clamp to insertedCount in case the Zipfian generator was
+	// initialised with a larger n (e.g. recordCount > current insertedCount)
+	offset := zipf.Next(rng)
+	if offset >= insertedCount {
+		offset = insertedCount - 1
 	}
-	// -ln(1-u) / ln(1/(1-0.999)) = -ln(1-u) / ln(1000)
-	exp := -math.Log(1.0-u) / math.Log(1000.0)
-	offset := int64(exp * float64(insertedCount))
+	// Subtract from the most recently inserted key — biases toward recent keys
 	key := insertedCount - 1 - offset
 	if key < 0 {
 		key = 0
