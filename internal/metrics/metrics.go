@@ -6,7 +6,7 @@ import (
 	"time"
 
 	hdrhistogram "github.com/HdrHistogram/hdrhistogram-go"
-	"github.com/yourusername/mongo-ycsb/internal/workloads"
+	"github.com/sahil-doshi-mongodb/mongo-ycsb/internal/workloads"
 )
 
 // Recorder is the interface all metric backends must satisfy.

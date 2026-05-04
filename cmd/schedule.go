@@ -6,9 +6,9 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
-	"github.com/yourusername/mongo-ycsb/internal/config"
-	"github.com/yourusername/mongo-ycsb/internal/orchestrator"
-	"github.com/yourusername/mongo-ycsb/internal/scheduler"
+	"github.com/sahil-doshi-mongodb/mongo-ycsb/internal/config"
+	"github.com/sahil-doshi-mongodb/mongo-ycsb/internal/orchestrator"
+	"github.com/sahil-doshi-mongodb/mongo-ycsb/internal/scheduler"
 	"go.uber.org/zap"
 )
 

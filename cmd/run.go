@@ -7,8 +7,8 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-	"github.com/yourusername/mongo-ycsb/internal/config"
-	"github.com/yourusername/mongo-ycsb/internal/orchestrator"
+	"github.com/sahil-doshi-mongodb/mongo-ycsb/internal/config"
+	"github.com/sahil-doshi-mongodb/mongo-ycsb/internal/orchestrator"
 	"go.uber.org/zap"
 )
 

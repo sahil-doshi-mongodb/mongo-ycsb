@@ -5,10 +5,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/yourusername/mongo-ycsb/internal/config"
-	"github.com/yourusername/mongo-ycsb/internal/datagen"
-	"github.com/yourusername/mongo-ycsb/internal/metrics"
-	"github.com/yourusername/mongo-ycsb/internal/workloads"
+	"github.com/sahil-doshi-mongodb/mongo-ycsb/internal/config"
+	"github.com/sahil-doshi-mongodb/mongo-ycsb/internal/datagen"
+	"github.com/sahil-doshi-mongodb/mongo-ycsb/internal/metrics"
+	"github.com/sahil-doshi-mongodb/mongo-ycsb/internal/workloads"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.uber.org/zap"
 )

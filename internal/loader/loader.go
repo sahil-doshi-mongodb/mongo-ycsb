@@ -7,8 +7,8 @@ import (
 	"sync"
 
 	"github.com/brianvoe/gofakeit/v6"
-	"github.com/yourusername/mongo-ycsb/internal/config"
-	"github.com/yourusername/mongo-ycsb/internal/datagen"
+	"github.com/sahil-doshi-mongodb/mongo-ycsb/internal/config"
+	"github.com/sahil-doshi-mongodb/mongo-ycsb/internal/datagen"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"

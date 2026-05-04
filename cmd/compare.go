@@ -5,8 +5,8 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
-	"github.com/yourusername/mongo-ycsb/internal/comparer"
-	"github.com/yourusername/mongo-ycsb/internal/config"
+	"github.com/sahil-doshi-mongodb/mongo-ycsb/internal/comparer"
+	"github.com/sahil-doshi-mongodb/mongo-ycsb/internal/config"
 )
 
 var compareCmd = &cobra.Command{

@@ -7,7 +7,7 @@ import (
 
 	"github.com/robfig/cron/v3"
 	"github.com/spf13/cobra"
-	"github.com/yourusername/mongo-ycsb/internal/config"
+	"github.com/sahil-doshi-mongodb/mongo-ycsb/internal/config"
 )
 
 // skipPreloadFlag is set by runCmd — used by printConfigSummary to avoid

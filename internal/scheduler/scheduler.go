@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/robfig/cron/v3"
-	"github.com/yourusername/mongo-ycsb/internal/config"
+	"github.com/sahil-doshi-mongodb/mongo-ycsb/internal/config"
 	"go.uber.org/zap"
 )
 

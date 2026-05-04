@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/yourusername/mongo-ycsb/internal/workloads"
+	"github.com/sahil-doshi-mongodb/mongo-ycsb/internal/workloads"
 )
 
 // Ticker prints live benchmark metrics to the console at a fixed interval

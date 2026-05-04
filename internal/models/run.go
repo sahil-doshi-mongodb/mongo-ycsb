@@ -3,7 +3,7 @@ package models
 import (
 	"time"
 
-	"github.com/yourusername/mongo-ycsb/internal/config"
+	"github.com/sahil-doshi-mongodb/mongo-ycsb/internal/config"
 )
 
 // RunResult is the top-level document stored per benchmark run.

@@ -1,4 +1,4 @@
-module github.com/yourusername/mongo-ycsb
+module github.com/sahil-doshi-mongodb/mongo-ycsb
 
 go 1.23.0
 

@@ -1,6 +1,6 @@
 package main
 
-import "github.com/yourusername/mongo-ycsb/cmd"
+import "github.com/sahil-doshi-mongodb/mongo-ycsb/cmd"
 
 func main() {
     cmd.Execute()
