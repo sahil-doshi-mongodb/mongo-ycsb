@@ -68,8 +68,10 @@ type templateData struct {
 	TotalErrors     int64
 	OpsPerSec       float64
 	Tags            string
+	MongoVersion    string
+	Host            string
+	StorageEngine   string
 	Operations      []opRow
-
 	// JSON-encoded arrays for Chart.js
 	DeltaLabels   template.JS
 	DeltaOpsData  template.JS
@@ -167,6 +169,13 @@ func buildTemplateData(r *models.RunResult) (*templateData, error) {
 		tags += t
 	}
 
+	mongoVersion, host, storageEngine := "", "", ""
+	if r.ClusterInfo != nil {
+		mongoVersion = r.ClusterInfo.MongoVersion
+		host = r.ClusterInfo.Host
+		storageEngine = r.ClusterInfo.StorageEngine
+	}
+
 	return &templateData{
 		RunID:           r.RunID,
 		Timestamp:       r.Timestamp.Format("2006-01-02 15:04:05 UTC"),
@@ -178,6 +187,9 @@ func buildTemplateData(r *models.RunResult) (*templateData, error) {
 		TotalErrors:     r.Summary.TotalErrors,
 		OpsPerSec:       r.Summary.OpsPerSec,
 		Tags:            tags,
+		MongoVersion:    mongoVersion,
+		Host:            host,
+		StorageEngine:   storageEngine,
 		Operations:      ops,
 		DeltaLabels:     dlJS,
 		DeltaOpsData:    doJS,
@@ -265,6 +277,14 @@ const htmlTemplate = `<!DOCTYPE html>
     <div class="label">Errors</div>
     <div class="value">{{.TotalErrors}}</div>
   </div>
+  <div class="card">
+  <h3>Cluster Info</h3>
+  <table style="width:100%;border-collapse:collapse;">
+    <tr><td style="padding:4px 8px;color:#666;">MongoDB Version</td><td style="padding:4px 8px;font-weight:bold;">{{.MongoVersion}}</td></tr>
+    <tr><td style="padding:4px 8px;color:#666;">Host</td><td style="padding:4px 8px;">{{.Host}}</td></tr>
+    <tr><td style="padding:4px 8px;color:#666;">Storage Engine</td><td style="padding:4px 8px;">{{.StorageEngine}}</td></tr>
+  </table>
+</div>
 </div>
 
 <!-- Operation metrics table -->

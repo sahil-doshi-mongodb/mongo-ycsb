@@ -53,6 +53,17 @@ func (o *Orchestrator) Run(ctx context.Context) (*models.RunResult, error) {
 	db.WarmUpPool(ctx, benchClient, o.cfg.Execution.Threads)
 	fmt.Printf("✅ Connected to MongoDB\n\n")
 
+	// Capture cluster info — MongoDB version, host, storage engine
+	fmt.Printf("🔍 Capturing cluster info...\n")
+	clusterInfo, err := captureClusterInfo(ctx, benchClient)
+	if err != nil {
+		fmt.Printf("⚠️  Could not capture cluster info: %v\n", err)
+	} else {
+		fmt.Printf("   MongoDB version  : %s\n", clusterInfo.MongoVersion)
+		fmt.Printf("   Host             : %s\n", clusterInfo.Host)
+		fmt.Printf("   Storage engine   : %s\n\n", clusterInfo.StorageEngine)
+	}
+
 	benchColl := benchClient.
 		Database(o.cfg.Connection.Database).
 		Collection(o.cfg.Connection.Collection)
@@ -264,6 +275,7 @@ func (o *Orchestrator) Run(ctx context.Context) (*models.RunResult, error) {
 		Timestamp:     time.Now().UTC(),
 		Tags:          o.cfg.Results.Tags,
 		Config:        models.FromConfig(o.cfg),
+		ClusterInfo:   clusterInfo,
 		Delta:         modelDeltas,
 		SystemSamples: modelSysSamples,
 		ServerStats:   serverStats,
@@ -301,6 +313,40 @@ func (o *Orchestrator) Run(ctx context.Context) (*models.RunResult, error) {
 	}
 
 	return result, nil
+}
+
+// ── Cluster info capture ──────────────────────────────────────────────────────
+// captureClusterInfo queries the MongoDB server for version and host details.
+// Called once at benchmark start — adds no meaningful latency.
+func captureClusterInfo(ctx context.Context, client *mongo.Client) (*models.ClusterInfo, error) {
+	var buildInfo bson.M
+	if err := client.Database("admin").
+		RunCommand(ctx, bson.D{{Key: "buildInfo", Value: 1}}).
+		Decode(&buildInfo); err != nil {
+		return nil, fmt.Errorf("buildInfo command failed: %w", err)
+	}
+	var serverStatus bson.M
+	if err := client.Database("admin").
+		RunCommand(ctx, bson.D{{Key: "serverStatus", Value: 1}}).
+		Decode(&serverStatus); err != nil {
+		return nil, fmt.Errorf("serverStatus command failed: %w", err)
+	}
+	info := &models.ClusterInfo{}
+	if v, ok := buildInfo["version"].(string); ok {
+		info.MongoVersion = v
+	}
+	if v, ok := buildInfo["gitVersion"].(string); ok {
+		info.GitVersion = v
+	}
+	if v, ok := serverStatus["host"].(string); ok {
+		info.Host = v
+	}
+	if se, ok := serverStatus["storageEngine"].(bson.M); ok {
+		if name, ok := se["name"].(string); ok {
+			info.StorageEngine = name
+		}
+	}
+	return info, nil
 }
 
 // ── Server opcounter capture ──────────────────────────────────────────────────
@@ -367,7 +413,13 @@ func printSummary(r *models.RunResult) {
 	fmt.Printf("   Total Ops        : %d\n", r.Summary.TotalOps)
 	fmt.Printf("   Errors           : %d\n", r.Summary.TotalErrors)
 	fmt.Printf("   Throughput       : %.0f ops/sec\n", r.Summary.OpsPerSec)
-	fmt.Printf("   Key Distribution : %s\n\n", r.Config.KeyDistribution)
+	fmt.Printf("   Key Distribution : %s\n", r.Config.KeyDistribution)
+	if r.ClusterInfo != nil {
+		fmt.Printf("   MongoDB Version  : %s\n", r.ClusterInfo.MongoVersion)
+		fmt.Printf("   Host             : %s\n", r.ClusterInfo.Host)
+		fmt.Printf("   Storage Engine   : %s\n", r.ClusterInfo.StorageEngine)
+	}
+	fmt.Printf("\n")
 
 	fmt.Printf("   %-18s %8s %8s %8s %8s %8s %8s %9s %10s\n",
 		"Operation", "Count", "Errors", "Mean ms",

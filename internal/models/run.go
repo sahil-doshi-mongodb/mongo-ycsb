@@ -12,6 +12,7 @@ type RunResult struct {
 	Timestamp     time.Time      `bson:"timestamp"      json:"timestamp"`
 	Tags          []string       `bson:"tags"           json:"tags"`
 	Config        RunConfig      `bson:"config"         json:"config"`
+	ClusterInfo   *ClusterInfo   `bson:"cluster_info,omitempty" json:"cluster_info,omitempty"`
 	Summary       RunSummary     `bson:"summary"        json:"summary"`
 	Delta         []DeltaPoint   `bson:"delta"          json:"delta"`
 	SystemSamples []SystemSample `bson:"system_samples" json:"system_samples"`
@@ -97,6 +98,14 @@ type OpcounterSnapshot struct {
 type ErrorSample struct {
 	Operation string `bson:"operation" json:"operation"`
 	Message   string `bson:"message"   json:"message"`
+}
+
+// ClusterInfo captures MongoDB server details at the time of the benchmark run.
+type ClusterInfo struct {
+	MongoVersion  string `bson:"mongo_version"  json:"mongo_version"`
+	GitVersion    string `bson:"git_version"    json:"git_version"`
+	Host          string `bson:"host"           json:"host"`
+	StorageEngine string `bson:"storage_engine" json:"storage_engine"`
 }
 
 // FromConfig builds a RunConfig snapshot from the full benchmark config.

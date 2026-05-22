@@ -1,0 +1,117 @@
+# =============================================================
+# FILE: zepto-run-workload-c-v8.yaml
+# =============================================================
+#
+# CHANGES TO MAKE BEFORE RUNNING:
+# --------------------------------
+# 1. connection.uri
+#    Replace with the Atlas connection string for the cluster
+#    you are benchmarking (v8).
+#
+# 2. results.mongodb.uri
+#    Replace with the connection string of the separate results
+#    cluster.
+#
+# VALIDATION COMMAND (run this first — touches nothing):
+# -------------------------------------------------------
+#   go run main.go dry-run --config configs/zepto-run-workload-c-v8.yaml
+#
+# RUN COMMAND:
+# ------------
+#   go run main.go run --config configs/zepto-run-workload-c-v8.yaml
+#
+# WHAT IT DOES:
+# -------------
+#   Workload C — 100% reads. Pure read workload, no writes at all.
+#   Tests maximum possible read throughput and WiredTiger cache
+#   efficiency. Best case scenario for the cluster.
+#   Runs for exactly 2 hours after a 5-minute warmup.
+#   Warmup period is excluded from all reported metrics.
+#   Results stored in MongoDB results cluster and local JSON/CSV/HTML.
+# =============================================================
+
+connection:
+  uri: ""
+  database: "ycsb"
+  collection: "usertable"
+  readPreference: "primary"
+  readConcern: "local"
+  writeConcern: "majority"
+  connectionPoolSize: 1000
+  timeoutMs: 60000
+
+workload:
+  type: "C"
+  writeAllFields: false
+  readAllFields: true
+  scan:
+    minLength: 1
+    maxLength: 1000
+    distribution: "uniform"
+
+documentShape:
+  fieldCount: 20
+  fieldSize: 1000
+  nestedDocs: false
+  arrays: false
+  useRealisticData: false
+
+indexes: []
+
+execution:
+  mode: "time"
+  duration: "1h"
+  threads: 512
+  targetOpsPerSec: 0
+  keyDistribution: "zipfian"
+  zipfianConstant: 0.99
+  recordCount: 2000000
+  keyPrefix: "user"
+  keyZeroPadding: 0
+  insertOrdering: "ordered"
+
+phases:
+  preload:
+    enabled: false
+    skipIfExists: true
+    documentCount: 2000000
+    threads: 512
+  warmup:
+    enabled: true
+    duration: "5m"
+
+schedule:
+  enabled: false
+  cron: ""
+  bounds:
+    type: "unlimited"
+    runFor: ""
+    maxRuns: 0
+    startAt: ""
+    stopAt: ""
+
+results:
+  mongodb:
+    enabled: true
+    uri: ""
+    database: "ycsb_results"
+    collection: "zepto_runs"
+  local:
+    enabled: true
+    path: "./results/zepto"
+  tags:
+    - "zepto"
+    - "workload-c"
+    - "v8"
+    - "phase-1-pre-scale-up"
+
+reporting:
+  console:
+    enabled: true
+    refreshIntervalMs: 5000
+  html:
+    enabled: true
+    outputPath: "./reports/zepto"
+  csv:
+    enabled: true
+    outputPath: "./results/zepto"

@@ -31,7 +31,7 @@ connection:
   # Atlas replica: "mongodb+srv://user:password@cluster.mongodb.net/"
   # With options:  "mongodb://host:27017/?replicaSet=rs0&authSource=admin"
   # REQUIRED — the benchmark will not start without this.
-  uri: "mongodb+srv://mongoadmin:9rJO1MWZqNXoz4mW@consultnew.3eano.mongodb.net/"
+  uri: "mongodb+srv://portfolio_app:3L2xjB1u7lj1TqHf@personal.3eano.mongodb.net/?appName=Sentinel"
 
   # Database to benchmark against.
   # Will be created automatically if it does not exist.
@@ -446,7 +446,7 @@ results:
     # Connection string for the results cluster.
     # Can be the same cluster as connection.uri but a different database.
     # REQUIRED when enabled is true.
-    uri: "mongodb+srv://mongoadmin:9rJO1MWZqNXoz4mW@consultnew.3eano.mongodb.net/"
+    uri: "mongodb+srv://portfolio_app:3L2xjB1u7lj1TqHf@personal.3eano.mongodb.net/?appName=Sentinel"
 
     # Database in the results cluster where run documents are stored.
     database: "ycsb_results"
