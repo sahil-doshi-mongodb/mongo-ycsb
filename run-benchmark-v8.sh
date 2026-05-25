@@ -27,15 +27,14 @@ set -euo pipefail
 # =============================================================
 # CONFIGURATION — EDIT THESE BEFORE RUNNING
 # =============================================================
-CLUSTER_VERSION="v8"         # ← only line that differs from v7 script
+CLUSTER_VERSION="v8"
 INITIAL_TIER="M40"
 SCALED_TIER="M60"
-CONFIGS="./configs/zepto-v8" # ← only other line that differs from v7 script
+CONFIGS="./configs/zepto-v8"
 BINARY="go run main.go"
 TEST_MODE="false"
 # =============================================================
 
-# Everything below this line is IDENTICAL to run-benchmark-v7.sh
 # ── Derived settings ──────────────────────────────────────────
 LOG_FILE="benchmark-${CLUSTER_VERSION}-$(date +%Y%m%d-%H%M%S).log"
 TEMP_DIR="/tmp/zepto-benchmark-$$"
@@ -46,9 +45,11 @@ if [ "$TEST_MODE" = "true" ]; then
     RUN_THREADS=10
     REST_SECONDS=10
     VERIFY_WAIT=5
+    WARMUP_DISPLAY="10s"
     echo ""
     echo "  ⚠️  TEST MODE ENABLED"
     echo "  Workloads will run for 30s with 10 threads."
+    echo "  Warmup is shortened to 10s."
     echo "  Rest periods are 10 seconds."
     echo "  Use this to validate the script before the real run."
     echo ""
@@ -57,8 +58,10 @@ else
     RUN_THREADS=512
     REST_SECONDS=3600
     VERIFY_WAIT=30
+    WARMUP_DISPLAY="5m"
 fi
 
+# ── Colour codes ──────────────────────────────────────────────
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -66,6 +69,7 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
+# ── Logging helpers ───────────────────────────────────────────
 log() {
     local msg="[$(date '+%Y-%m-%d %H:%M:%S')] $1"
     echo -e "${BLUE}${msg}${NC}" | tee -a "$LOG_FILE"
@@ -101,6 +105,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# ── Rest timer ────────────────────────────────────────────────
 rest() {
     local seconds=$1
     local label=$2
@@ -116,20 +121,48 @@ rest() {
     log_success "Rest complete — ${label}"
 }
 
+# ── Tag injection and warmup patch ────────────────────────────
+# Creates a temp copy of a config with tier/phase tags uncommented.
+# In TEST_MODE also shortens warmup from 5m to 10s.
+# The original config file is NEVER modified.
 patch_config() {
     local source_config=$1
     local tier=$2
     local phase=$3
     local output_file="$TEMP_DIR/$(basename $source_config .yaml)-${tier}-${phase}.yaml"
 
-    sed \
-        -e "s/^    # - \"${tier}\".*/    - \"${tier}\"/" \
-        -e "s/^    # - \"${phase}\".*/    - \"${phase}\"/" \
-        "$source_config" > "$output_file"
+    if [ "$TEST_MODE" = "true" ]; then
+        sed \
+            -e "s/^    # - \"${tier}\".*/    - \"${tier}\"/" \
+            -e "s/^    # - \"${phase}\".*/    - \"${phase}\"/" \
+            -e "s/duration: \"5m\"/duration: \"10s\"/" \
+            "$source_config" > "$output_file"
+    else
+        sed \
+            -e "s/^    # - \"${tier}\".*/    - \"${tier}\"/" \
+            -e "s/^    # - \"${phase}\".*/    - \"${phase}\"/" \
+            "$source_config" > "$output_file"
+    fi
 
     echo "$output_file"
 }
 
+# ── Make a patched verify config (warmup only, no tag changes) ─
+make_verify_config() {
+    local source_config=$1
+    local output_file="$TEMP_DIR/verify-$(basename $source_config)"
+
+    if [ "$TEST_MODE" = "true" ]; then
+        sed -e "s/duration: \"5m\"/duration: \"10s\"/" \
+            "$source_config" > "$output_file"
+    else
+        cp "$source_config" "$output_file"
+    fi
+
+    echo "$output_file"
+}
+
+# ── Run a single workload ─────────────────────────────────────
 run_workload() {
     local config_file=$1
     local workload_label=$2
@@ -140,29 +173,21 @@ run_workload() {
     patched=$(patch_config "$config_file" "$tier" "$phase")
 
     log "▶  Starting: ${workload_label} | ${CLUSTER_VERSION} | ${tier} | ${phase}"
-    log "   Duration : ${RUN_DURATION} (+ 5m warmup)"
+    log "   Duration : ${RUN_DURATION} (+ ${WARMUP_DISPLAY} warmup)"
     log "   Threads  : ${RUN_THREADS}"
     log "   Start    : $(date '+%Y-%m-%d %H:%M:%S')"
 
-    if [ "$TEST_MODE" = "true" ]; then
-        $BINARY run \
-            --config "$patched" \
-            --duration "$RUN_DURATION" \
-            --threads "$RUN_THREADS" \
-            --skip-preload \
-            2>&1 | tee -a "$LOG_FILE" || log_error "${workload_label} failed"
-    else
-        $BINARY run \
-            --config "$patched" \
-            --duration "$RUN_DURATION" \
-            --threads "$RUN_THREADS" \
-            --skip-preload \
-            2>&1 | tee -a "$LOG_FILE" || log_error "${workload_label} failed"
-    fi
+    $BINARY run \
+        --config "$patched" \
+        --duration "$RUN_DURATION" \
+        --threads "$RUN_THREADS" \
+        --skip-preload \
+        2>&1 | tee -a "$LOG_FILE" || log_error "${workload_label} failed"
 
     log_success "Completed: ${workload_label} | ${tier} | ${phase} | $(date '+%Y-%m-%d %H:%M:%S')"
 }
 
+# ── Run all 5 workloads for a given phase and tier ────────────
 run_phase() {
     local tier=$1
     local phase=$2
@@ -189,7 +214,7 @@ log "Config dir : $CONFIGS"
 log "Log file   : $LOG_FILE"
 log "Test mode  : $TEST_MODE"
 
-[ -f "main.go" ] || log_error "main.go not found. Make sure you are running this script from the ~/mongo-ycsb directory."
+[ -f "main.go" ] || log_error "main.go not found. Run this script from the ~/mongo-ycsb directory."
 [ -d "$CONFIGS" ] || log_error "Config directory not found: $CONFIGS"
 [ -f "${CONFIGS}/zepto-load.yaml" ] || log_error "Missing: ${CONFIGS}/zepto-load.yaml"
 
@@ -203,19 +228,16 @@ log "All config files present ✓"
 log "Checking URIs are filled in..."
 for workload in a b c d e; do
     cfg="${CONFIGS}/zepto-run-workload-${workload}.yaml"
-    # Check connection.uri is not empty
     uri_line=$(grep "^  uri:" "$cfg" | head -1)
     if echo "$uri_line" | grep -q 'uri: ""'; then
         log_error "connection.uri is empty in $cfg — fill in the Atlas connection string before running"
     fi
-    # Check results.mongodb.uri is not empty
     results_uri=$(grep "uri:" "$cfg" | tail -1)
     if echo "$results_uri" | grep -q 'uri: ""'; then
         log_error "results.mongodb.uri is empty in $cfg — fill in the results cluster connection string before running"
     fi
 done
 
-# Check load config
 uri_line=$(grep "^  uri:" "${CONFIGS}/zepto-load.yaml" | head -1)
 if echo "$uri_line" | grep -q 'uri: ""'; then
     log_error "connection.uri is empty in ${CONFIGS}/zepto-load.yaml — fill in the Atlas connection string before running"
@@ -256,18 +278,24 @@ log "Loading 2,000,000 documents × 20 fields × 1KB ≈ 40GB"
 log "Expected duration: 45–60 minutes"
 log "Start: $(date '+%Y-%m-%d %H:%M:%S')"
 
-$BINARY run --config "${CONFIGS}/zepto-load.yaml" \
-    2>&1 | tee -a "$LOG_FILE" || log_error "Data load FAILED."
+if [ "$TEST_MODE" = "true" ]; then
+    log "TEST MODE: Skipping full data load — using existing collection data"
+    log "In real mode, this loads 2,000,000 documents (~40GB)"
+else
+    $BINARY run --config "${CONFIGS}/zepto-load.yaml" \
+        2>&1 | tee -a "$LOG_FILE" || log_error "Data load FAILED. Fix the error above and restart."
+    log_success "Data load complete: $(date '+%Y-%m-%d %H:%M:%S')"
+fi
 
-log_success "Data load complete: $(date '+%Y-%m-%d %H:%M:%S')"
-
+# Verify load — uses patched config so warmup is short in TEST_MODE
 log "Verifying load — checking highest key..."
+VERIFY_CONFIG=$(make_verify_config "${CONFIGS}/zepto-run-workload-c.yaml")
 $BINARY run \
-    --config "${CONFIGS}/zepto-run-workload-c.yaml" \
+    --config "$VERIFY_CONFIG" \
     --duration "${VERIFY_WAIT}s" \
     --threads 5 \
     --skip-preload \
-    2>&1 | tee -a "$LOG_FILE" || log_warn "Verification run had issues"
+    2>&1 | tee -a "$LOG_FILE" || log_warn "Verification run had issues — check output above"
 
 echo ""
 echo "  ┌─────────────────────────────────────────────────────┐"
@@ -287,6 +315,7 @@ read -rp "  Load verified? Press ENTER to start Phase 1, or Ctrl+C to abort: "
 # PHASE 1 — BENCHMARKS AT INITIAL TIER
 # =============================================================
 log_section "Phase 1: Benchmarks at ${INITIAL_TIER} | ${CLUSTER_VERSION}"
+log "5 workloads × ${RUN_DURATION} run + ${WARMUP_DISPLAY} warmup + rest"
 log "Phase 1 start: $(date '+%Y-%m-%d %H:%M:%S')"
 
 run_phase "$INITIAL_TIER" "phase-1"
@@ -307,30 +336,36 @@ echo "  │  1. Open https://cloud.mongodb.com                  │"
 echo "  │  2. Go to your project → Clusters                   │"
 echo "  │  3. Scale v7 cluster: ${INITIAL_TIER} → ${SCALED_TIER}              │"
 echo "  │  4. Scale v8 cluster: ${INITIAL_TIER} → ${SCALED_TIER}              │"
-echo "  │  5. Wait for BOTH clusters to show: Active          │"
+echo "  │  5. Atlas begins rolling restart (~10-20 min)       │"
+echo "  │  6. Wait for BOTH clusters to show: Active          │"
 echo "  │                                                     │"
 echo "  │  Coordinate with the operator on EC2 Instance 1.   │"
+echo "  │  Both should initiate scale-up at the same time.   │"
 echo "  └─────────────────────────────────────────────────────┘"
 echo ""
 read -rp "  Have you INITIATED the scale-up on BOTH clusters? Press ENTER: "
 
-log "Waiting ${REST_SECONDS}s for Atlas rolling restart to complete..."
-rest $REST_SECONDS "Atlas scale-up buffer"
+log "Scale-up initiated. Waiting ${REST_SECONDS}s for Atlas rolling restart to complete..."
+rest $REST_SECONDS "Atlas scale-up buffer — waiting for rolling restart"
 
+# Pre-Phase 2 verification — uses patched config so warmup is short in TEST_MODE
 log "Running pre-Phase 2 verification smoke test..."
+VERIFY_CONFIG2=$(make_verify_config "${CONFIGS}/zepto-run-workload-c.yaml")
 $BINARY run \
-    --config "${CONFIGS}/zepto-run-workload-c.yaml" \
+    --config "$VERIFY_CONFIG2" \
     --duration "${VERIFY_WAIT}s" \
     --threads 5 \
     --skip-preload \
-    2>&1 | tee -a "$LOG_FILE" || log_warn "Verification smoke test had issues"
+    2>&1 | tee -a "$LOG_FILE" || log_warn "Verification smoke test had issues — check output above"
 
 echo ""
 echo "  ┌─────────────────────────────────────────────────────┐"
 echo "  │  VERIFY BEFORE CONTINUING                           │"
-echo "  │  1. Both clusters show: ${SCALED_TIER} tier                 │"
-echo "  │  2. Both clusters show: Active (green)              │"
-echo "  │  3. Smoke test shows: 0 errors                      │"
+echo "  │                                                     │"
+echo "  │  1. Both Atlas clusters show: ${SCALED_TIER} tier           │"
+echo "  │  2. Both Atlas clusters show: Active (green)        │"
+echo "  │  3. Smoke test above shows: 0 errors                │"
+echo "  │  4. Smoke test throughput similar to Phase 1        │"
 echo "  └─────────────────────────────────────────────────────┘"
 echo ""
 read -rp "  Both clusters scaled and healthy? Press ENTER to start Phase 2: "
@@ -339,6 +374,7 @@ read -rp "  Both clusters scaled and healthy? Press ENTER to start Phase 2: "
 # PHASE 2 — BENCHMARKS AT SCALED TIER
 # =============================================================
 log_section "Phase 2: Benchmarks at ${SCALED_TIER} | ${CLUSTER_VERSION}"
+log "5 workloads × ${RUN_DURATION} run + ${WARMUP_DISPLAY} warmup + rest"
 log "Phase 2 start: $(date '+%Y-%m-%d %H:%M:%S')"
 
 run_phase "$SCALED_TIER" "phase-2"
@@ -355,14 +391,22 @@ echo "  │  BENCHMARK COMPLETE                                 │"
 echo "  │                                                     │"
 echo "  │  Cluster   : ${CLUSTER_VERSION}                              │"
 echo "  │  Completed : $(date '+%Y-%m-%d %H:%M:%S')              │"
-echo "  │  Log file  : ${LOG_FILE}            │"
+echo "  │  Log file  : ${LOG_FILE}       │"
 echo "  │                                                     │"
 echo "  │  Results   : ./results/zepto/                       │"
 echo "  │  Reports   : ./reports/zepto/                       │"
+echo "  │                                                     │"
+echo "  │  NEXT STEPS:                                        │"
+echo "  │  1. Confirm EC2 Instance 1 (v7) has also finished   │"
+echo "  │  2. Download results from both instances            │"
+echo "  │  3. Run comparison commands printed below           │"
 echo "  └─────────────────────────────────────────────────────┘"
 echo ""
 log "Comparison commands:"
 for workload in a b c d e; do
-    log "  ./mongo-ycsb compare --config configs/zepto-v7/zepto-run-workload-${workload}.yaml --tag-a \"v7,workload-${workload},phase-1,${INITIAL_TIER}\" --tag-b \"v8,workload-${workload},phase-1,${INITIAL_TIER}\" --output both"
-    log "  ./mongo-ycsb compare --config configs/zepto-v7/zepto-run-workload-${workload}.yaml --tag-a \"v7,workload-${workload},phase-2,${SCALED_TIER}\" --tag-b \"v8,workload-${workload},phase-2,${SCALED_TIER}\" --output both"
+    wl_upper=$(echo "$workload" | tr '[:lower:]' '[:upper:]')
+    log "  # Workload ${wl_upper} — ${INITIAL_TIER}:"
+    log "  go run main.go compare --config ${CONFIGS}/zepto-run-workload-${workload}.yaml --tag-a \"v7,workload-${workload},phase-1,${INITIAL_TIER}\" --tag-b \"v8,workload-${workload},phase-1,${INITIAL_TIER}\" --output both"
+    log "  # Workload ${wl_upper} — ${SCALED_TIER}:"
+    log "  go run main.go compare --config ${CONFIGS}/zepto-run-workload-${workload}.yaml --tag-a \"v7,workload-${workload},phase-2,${SCALED_TIER}\" --tag-b \"v8,workload-${workload},phase-2,${SCALED_TIER}\" --output both"
 done
