@@ -82,6 +82,16 @@ func (d *Diff) PrintConsole() {
 	fmt.Printf("  %-20s  %-38s  %-38s\n", "Tags",
 		joinTags(a.Tags), joinTags(b.Tags))
 
+	mongoVerA, mongoVerB := "N/A", "N/A"
+	if a.ClusterInfo != nil {
+		mongoVerA = a.ClusterInfo.MongoVersion
+	}
+	if b.ClusterInfo != nil {
+		mongoVerB = b.ClusterInfo.MongoVersion
+	}
+	fmt.Printf("  %-20s  %-38s  %-38s\n", "MongoDB Version",
+		mongoVerA, mongoVerB)
+
 	fmt.Printf("\n  %-20s  %-38s  %-38s  %s\n",
 		"Metric", "Run A", "Run B", "Delta")
 	fmt.Printf("  %-20s  %-38s  %-38s  %s\n",

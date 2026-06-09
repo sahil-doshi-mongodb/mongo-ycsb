@@ -54,14 +54,17 @@ type compareData struct {
 }
 
 type runMeta struct {
-	RunID     string
-	Timestamp string
-	Workload  string
-	Threads   int
-	Tags      string
-	OpsPerSec float64
-	TotalOps  int64
-	Errors    int64
+	RunID         string
+	Timestamp     string
+	Workload      string
+	Threads       int
+	Tags          string
+	OpsPerSec     float64
+	TotalOps      int64
+	Errors        int64
+	MongoVersion  string
+	Host          string
+	StorageEngine string
 }
 
 type opCompareRow struct {
@@ -139,26 +142,45 @@ func (d *Diff) buildCompareData() (*compareData, error) {
 		return nil, err
 	}
 
+	mongoVersionA, hostA, storageEngineA := "N/A", "N/A", "N/A"
+	if d.RunA.ClusterInfo != nil {
+		mongoVersionA = d.RunA.ClusterInfo.MongoVersion
+		hostA = d.RunA.ClusterInfo.Host
+		storageEngineA = d.RunA.ClusterInfo.StorageEngine
+	}
+	mongoVersionB, hostB, storageEngineB := "N/A", "N/A", "N/A"
+	if d.RunB.ClusterInfo != nil {
+		mongoVersionB = d.RunB.ClusterInfo.MongoVersion
+		hostB = d.RunB.ClusterInfo.Host
+		storageEngineB = d.RunB.ClusterInfo.StorageEngine
+	}
+
 	return &compareData{
 		RunA: runMeta{
-			RunID:     d.RunA.RunID,
-			Timestamp: d.RunA.Timestamp.Format("2006-01-02 15:04:05"),
-			Workload:  d.RunA.Config.Workload,
-			Threads:   d.RunA.Config.Threads,
-			Tags:      joinTags(d.RunA.Tags),
-			OpsPerSec: d.RunA.Summary.OpsPerSec,
-			TotalOps:  d.RunA.Summary.TotalOps,
-			Errors:    d.RunA.Summary.TotalErrors,
+			RunID:         d.RunA.RunID,
+			Timestamp:     d.RunA.Timestamp.Format("2006-01-02 15:04:05"),
+			Workload:      d.RunA.Config.Workload,
+			Threads:       d.RunA.Config.Threads,
+			Tags:          joinTags(d.RunA.Tags),
+			OpsPerSec:     d.RunA.Summary.OpsPerSec,
+			TotalOps:      d.RunA.Summary.TotalOps,
+			Errors:        d.RunA.Summary.TotalErrors,
+			MongoVersion:  mongoVersionA,
+			Host:          hostA,
+			StorageEngine: storageEngineA,
 		},
 		RunB: runMeta{
-			RunID:     d.RunB.RunID,
-			Timestamp: d.RunB.Timestamp.Format("2006-01-02 15:04:05"),
-			Workload:  d.RunB.Config.Workload,
-			Threads:   d.RunB.Config.Threads,
-			Tags:      joinTags(d.RunB.Tags),
-			OpsPerSec: d.RunB.Summary.OpsPerSec,
-			TotalOps:  d.RunB.Summary.TotalOps,
-			Errors:    d.RunB.Summary.TotalErrors,
+			RunID:         d.RunB.RunID,
+			Timestamp:     d.RunB.Timestamp.Format("2006-01-02 15:04:05"),
+			Workload:      d.RunB.Config.Workload,
+			Threads:       d.RunB.Config.Threads,
+			Tags:          joinTags(d.RunB.Tags),
+			OpsPerSec:     d.RunB.Summary.OpsPerSec,
+			TotalOps:      d.RunB.Summary.TotalOps,
+			Errors:        d.RunB.Summary.TotalErrors,
+			MongoVersion:  mongoVersionB,
+			Host:          hostB,
+			StorageEngine: storageEngineB,
 		},
 		Ops:         rows,
 		DeltaLabels: dlJS,
@@ -230,7 +252,10 @@ const compareTemplate = `<!DOCTYPE html>
     <div class="metric"><span>Tags</span><span class="val">{{.RunA.Tags}}</span></div>
     <div class="metric"><span>Throughput</span><span class="val">{{printf "%.0f" .RunA.OpsPerSec}} ops/s</span></div>
     <div class="metric"><span>Total Ops</span><span class="val">{{.RunA.TotalOps}}</span></div>
-    <div class="metric"><span>Errors</span><span class="val">{{.RunA.Errors}}</span></div>
+        <div class="metric"><span>Errors</span><span class="val">{{.RunA.Errors}}</span></div>
+    <div class="metric"><span>MongoDB Version</span><span class="val">{{.RunA.MongoVersion}}</span></div>
+    <div class="metric"><span>Host</span><span class="val" style="font-size:0.75rem">{{.RunA.Host}}</span></div>
+    <div class="metric"><span>Storage Engine</span><span class="val">{{.RunA.StorageEngine}}</span></div>
   </div>
   <div class="run-card b">
     <h2>🟠 Run B</h2>
@@ -242,6 +267,9 @@ const compareTemplate = `<!DOCTYPE html>
     <div class="metric"><span>Throughput</span><span class="val">{{printf "%.0f" .RunB.OpsPerSec}} ops/s</span></div>
     <div class="metric"><span>Total Ops</span><span class="val">{{.RunB.TotalOps}}</span></div>
     <div class="metric"><span>Errors</span><span class="val">{{.RunB.Errors}}</span></div>
+    <div class="metric"><span>MongoDB Version</span><span class="val">{{.RunB.MongoVersion}}</span></div>
+    <div class="metric"><span>Host</span><span class="val" style="font-size:0.75rem">{{.RunB.Host}}</span></div>
+    <div class="metric"><span>Storage Engine</span><span class="val">{{.RunB.StorageEngine}}</span></div>
   </div>
 </div>
 
