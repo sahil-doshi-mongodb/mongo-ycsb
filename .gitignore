@@ -5,3 +5,4 @@ run-benchmark-v7.sh
 run-benchmark-v8.sh
 run-comparisons.sh
 documents.json
+analysis.txt

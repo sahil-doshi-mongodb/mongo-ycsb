@@ -1,10 +1,9 @@
 
-
 # mongo-ycsb
 
-A MongoDB-native YCSB-compatible benchmarking tool written in Go. Designed to produce results directly comparable to the original [Yahoo! Cloud Serving Benchmark (YCSB)](https://github.com/brianfrankcooper/YCSB) while adding significantly better observability, result storage, scheduling, and comparison capabilities — with no JVM required.
+A MongoDB-native, YCSB-compatible benchmarking tool written in Go.
 
----
+Designed to produce results directly comparable to the original Yahoo! Cloud Serving Benchmark (YCSB) while adding significantly better observability, result storage, scheduling, and comparison capabilities — with no JVM required.
 
 ## Table of Contents
 
@@ -25,11 +24,11 @@ A MongoDB-native YCSB-compatible benchmarking tool written in Go. Designed to pr
 - [Project Structure](#project-structure)
 - [Dependencies](#dependencies)
 
----
-
 ## Why mongo-ycsb
 
-The original YCSB is a Java tool with broad database support but limited MongoDB-specific controls and no built-in result persistence or comparison. `mongo-ycsb` is purpose-built for MongoDB with:
+The original YCSB is a Java tool with broad database support but limited MongoDB-specific controls and no built-in result persistence or comparison.
+
+mongo-ycsb is purpose-built for MongoDB with:
 
 | Capability | Original YCSB | mongo-ycsb |
 |---|---|---|
@@ -58,32 +57,37 @@ The original YCSB is a Java tool with broad database support but limited MongoDB
 ## Features
 
 ### Workloads
-- Standard YCSB workloads **A through F** out of the box
-- **Custom workload** definitions via config — define your own read/insert/update/delete/scan/RMW mix
+
+- Standard YCSB workloads A through F out of the box
+- Custom workload definitions via config — define your own read/insert/update/delete/scan/RMW mix
 - `writeAllFields` and `readAllFields` flags to match original YCSB behaviour exactly
 - Variable scan length for Workload E (configurable min/max with uniform or Zipfian distribution)
 
 ### Key Distributions
+
 - **Zipfian** (default in original YCSB) — realistic skewed access; ~20% of keys get ~80% of traffic
 - **Uniform** — equal probability for every key
 - **Latest** — exponentially biased toward recently inserted keys (Workload D semantic)
 - **Sequential** — rotates through keys in order
 
 ### Execution Modes
+
 - **Time-bound** — run for a fixed duration (e.g. `5m`, `1h`)
 - **Operation count** — run exactly N operations
 - **Ramp-up** — gradually increase concurrency to find the saturation point
 - **Target throughput** — cap ops/sec with a token-bucket rate limiter
 
 ### Data Generation
+
 - Configurable field count, field size (exact bytes), nested documents, arrays
-- Realistic data mode: names, emails, cities, dates, prices via `gofakeit`
+- Realistic data mode: names, emails, cities, dates, prices via gofakeit
 - Random bytes mode: matches original YCSB default behaviour
 - Exact field size enforcement — values are padded or truncated to exactly `fieldSize` bytes
 - Zero-padded keys (e.g. `user000000000042`) to match original YCSB format exactly
 - Hashed insert ordering to avoid shard hotspots
 
 ### Preload & Setup
+
 - Bulk preload with configurable thread count (batch size 100)
 - `skipIfExists` — skip preload if the collection already has data
 - `--skip-preload` CLI flag for fast iteration on repeated runs
@@ -92,44 +96,46 @@ The original YCSB is a Java tool with broad database support but limited MongoDB
 - Warmup phase — runs workload for a configured duration, discards metrics
 
 ### Metrics & Observability
-- **HDR Histograms** for accurate p50, p95, p99, p99.9, p99.99, p99.999 percentiles
-- **Live console ticker** — refreshes every second with ops/sec, p50, p99, p9999, error count
-- **Delta time-series** — per-second snapshots stored with every run result
-- **System metrics** — CPU and memory sampled every second during the benchmark
-- **Server opcounters** — captures `db.serverStatus().opcounters` before and after the run to verify equal workload distribution across clusters
-- **Per-record scan latency** — normalised scan time (total ÷ records returned), matching YCSB `SCAN-LATENCY-PER-RECORD`
-- **Acknowledged key counter** — keys only become available for reads after their insert is confirmed, matching YCSB's `AcknowledgedCounterGenerator`
+
+- HDR Histograms for accurate p50, p95, p99, p99.9, p99.99, p99.999 percentiles
+- Live console ticker — refreshes every second with ops/sec, p50, p99, p9999, error count
+- Delta time-series — per-second snapshots stored with every run result
+- System metrics — CPU and memory sampled every second during the benchmark
+- Server opcounters — captures `db.serverStatus().opcounters` before and after the run to verify equal workload distribution across clusters
+- Per-record scan latency — normalised scan time (total ÷ records returned), matching YCSB SCAN-LATENCY-PER-RECORD
+- Acknowledged key counter — keys only become available for reads after their insert is confirmed, matching YCSB's `AcknowledgedCounterGenerator`
 
 ### Result Storage
+
 - **MongoDB collection** — full `RunResult` document with all metrics, delta, system samples, and server stats
 - **Local JSON** — `./results/<run_id>.json` — always written as a fallback
 - **CSV** — flat per-operation metrics file (summary only — cannot be used for comparison)
 - **HTML report** — self-contained with Chart.js charts for throughput, p99 latency, CPU, memory
 
 ### Comparison Mode
-- Compare any two runs **by Run ID** or **by tag** (most recent run per tag)
+
+- Compare any two runs by Run ID or by tag (most recent run per tag)
 - Console output — side-by-side table with delta percentages
 - HTML comparison report — overlaid throughput and p99 latency charts for both runs
-- Loads from **MongoDB first**, falls back to **local JSON** automatically
-- **CSV cannot be used for comparison** — it contains summary metrics only, not the full RunResult
+- Loads from MongoDB first, falls back to local JSON automatically
+- CSV cannot be used for comparison — it contains summary metrics only, not the full `RunResult`
 
 ### Scheduling
-- CRON scheduling with a single active bound type (set `bounds.type`):
-  - `unlimited` — runs forever until Ctrl+C
-  - `runFor` — stops after a total wall-clock duration
-  - `maxRuns` — stops after N completed runs
-  - `timeWindow` — only fires between `startAt` and `stopAt` timestamps
-- `dry-run` shows the next 5 trigger times, window markers, and estimated run count
 
----
+CRON scheduling with a single active bound type (set `bounds.type`):
+
+- **unlimited** — runs forever until Ctrl+C
+- **runFor** — stops after a total wall-clock duration
+- **maxRuns** — stops after N completed runs
+- **timeWindow** — only fires between `startAt` and `stopAt` timestamps
+
+`dry-run` shows the next 5 trigger times, window markers, and estimated run count.
 
 ## Requirements
 
 - Go 1.21+
 - Access to a MongoDB cluster (self-managed or Atlas)
 - No JVM, no Maven, no external dependencies beyond `go mod tidy`
-
----
 
 ## Installation
 
@@ -145,8 +151,6 @@ Or run directly without building:
 ```bash
 go run main.go <command> [flags]
 ```
-
----
 
 ## Quick Start
 
@@ -196,8 +200,6 @@ go run main.go compare \
   --output both
 ```
 
----
-
 ## CLI Reference
 
 ### `run` — Execute a benchmark
@@ -207,12 +209,12 @@ mongo-ycsb run --config <path> [flags]
 ```
 
 | Flag | Description |
-|---|---|
+| --- | --- |
 | `--config` | Path to YAML config file (required) |
 | `--workload` | Workload type: A, B, C, D, E, F, or custom |
 | `--threads` | Number of concurrent goroutines |
-| `--duration` | Run duration e.g. `30s`, `5m`, `1h` (sets mode=time) |
-| `--ops` | Total operation count (sets mode=ops) |
+| `--duration` | Run duration e.g. `30s`, `5m`, `1h` (sets `mode=time`) |
+| `--ops` | Total operation count (sets `mode=ops`) |
 | `--uri` | MongoDB connection URI (overrides config) |
 | `--database` | Database name (overrides config) |
 | `--collection` | Collection name (overrides config) |
@@ -241,7 +243,7 @@ mongo-ycsb compare --config <path> --tag-a v7 --tag-b v8 --output both
 ```
 
 | Flag | Description |
-|---|---|
+| --- | --- |
 | `--tag-a` | Tag for Run A |
 | `--tag-b` | Tag for Run B |
 | `--output` | `console` (default) \| `html` \| `both` |
@@ -260,8 +262,6 @@ Reads schedule configuration from the config file. Blocks until the configured b
 ```bash
 mongo-ycsb report --config <path> <run-id>
 ```
-
----
 
 ## Configuration Reference
 
@@ -303,16 +303,16 @@ workload:
     distribution: "uniform"        # uniform | zipfian
 ```
 
-### Standard Workload Reference
+#### Standard Workload Reference
 
 | Workload | Read % | Insert % | Update % | Scan % | RMW % | Semantic |
-|---|---|---|---|---|---|---|
-| **A** | 50 | — | 50 | — | — | Session store — heavy update |
-| **B** | 95 | — | 5 | — | — | Photo tagging — mostly reads |
-| **C** | 100 | — | — | — | — | User profile cache — read only |
-| **D** | 95 | 5 | — | — | — | Read latest — uses Latest distribution |
-| **E** | — | 5 | — | 95 | — | Short ranges — variable scan length |
-| **F** | 50 | — | — | — | 50 | Read-modify-write |
+| --- | :---: | :---: | :---: | :---: | :---: | --- |
+| A | 50 | | 50 | | | Session store — heavy update |
+| B | 95 | | 5 | | | Photo tagging — mostly reads |
+| C | 100 | | | | | User profile cache — read only |
+| D | 95 | 5 | | | | Read latest — uses Latest distribution |
+| E | 5 | | | 95 | | Short ranges — variable scan length |
+| F | 50 | | | | 50 | Read-modify-write |
 
 ### Document Shape
 
@@ -330,16 +330,19 @@ documentShape:
 
 ### Indexes
 
-Original YCSB creates **no secondary indexes** — all queries run against the default `_id` index only. To match this behaviour exactly:
+Original YCSB creates no secondary indexes — all queries run against the default `_id` index only.
+
+To match this behaviour exactly:
 
 ```yaml
 indexes: []
 ```
 
 The `dry-run` command confirms this:
+
 ```
 Indexes : none — only default _id index
-          ↳ matches original YCSB behaviour (no secondary indexes)
+matches original YCSB behaviour (no secondary indexes)
 ```
 
 To benchmark with secondary index overhead (e.g. before vs after adding an index):
@@ -363,7 +366,7 @@ indexes:
     unique: false
 ```
 
-Indexes are always created **after preload** so the collection `Drop()` during preload does not wipe them.
+Indexes are always created **after** preload so the collection `Drop()` during preload does not wipe them.
 
 ### Execution
 
@@ -427,23 +430,26 @@ results:
 
 Tags are free-form string labels attached to every run produced by this config.
 
-**Purpose 1 — Identification**: describe what makes this run different from others. Tags appear in every result: MongoDB document, JSON file, HTML report. When you look at a result later, tags tell you what config produced it without reading the full config snapshot.
+**Purpose 1 — Identification:** describe what makes this run different from others. Tags appear in every result: MongoDB document, JSON file, HTML report. When you look at a result later, tags tell you what config produced it without reading the full config snapshot.
 
-**Purpose 2 — Tag-based comparison**: find runs without remembering run IDs.
+**Purpose 2 — Tag-based comparison:** find runs without remembering run IDs.
+
 ```bash
 go run main.go compare --tag-a "before-index" --tag-b "after-index"
 ```
+
 Finds the most recent run with each tag automatically.
 
-**Purpose 3 — MongoDB filtering**: query your results collection directly.
-```js
+**Purpose 3 — MongoDB filtering:** query your results collection directly.
+
+```javascript
 db.runs.find({ tags: { $all: ["v8", "zipfian", "workload-a"] } })
 db.runs.find({ tags: "v7" }).sort({ timestamp: -1 })
 ```
 
-**Good tags** describe: version (`v7`, `v8`), cluster tier (`m40`, `m60`), workload (`workload-a`), distribution (`zipfian`, `uniform`), write concern (`majority`, `w1`), and state (`baseline`, `before-index`, `after-index`).
+Good tags describe: version (`v7`, `v8`), cluster tier (`m40`, `m60`), workload (`workload-a`), distribution (`zipfian`, `uniform`), write concern (`majority`, `w1`), and state (`baseline`, `before-index`, `after-index`).
 
-**Limitation**: `--tag-a`/`--tag-b` match on a single tag string and pick the most recent run with that tag. If multiple runs share the same tag, use run IDs directly for precise targeting.
+**Limitation:** `--tag-a`/`--tag-b` match on a single tag string and pick the most recent run with that tag. If multiple runs share the same tag, use run IDs directly for precise targeting.
 
 ### Reporting
 
@@ -466,7 +472,6 @@ reporting:
 schedule:
   enabled: false
   cron: "0 * * * *"              # standard 5-field cron expression
-
   bounds:
     # Set type to exactly ONE of: unlimited | runFor | maxRuns | timeWindow
     # Only populate the fields for the type you choose.
@@ -484,15 +489,13 @@ schedule:
 ```
 
 | Bound Type | Stops When |
-|---|---|
+| --- | --- |
 | `unlimited` | Ctrl+C only |
 | `runFor` | Total wall-clock duration elapsed from start |
 | `maxRuns` | N runs successfully completed |
 | `timeWindow` | A trigger fires after `stopAt` timestamp |
 
 Only one `bounds.type` is active per scheduler. Setting fields for a different type than the one selected is flagged as a validation error during `dry-run`.
-
----
 
 ## Key Distributions
 
@@ -532,8 +535,6 @@ Rotates through all existing keys in order. Useful for simulating batch processi
 execution:
   keyDistribution: "sequential"
 ```
-
----
 
 ## Execution Modes
 
@@ -584,37 +585,46 @@ execution:
   targetOpsPerSec: 1000           # cap at 1000 ops/sec
 ```
 
----
-
 ## Result Storage & Reporting
 
 Every completed benchmark run produces:
 
+> **Timing model.** Every run records two explicit, UTC time windows:
+>
+> - **Benchmark window** (`benchmark_start_time` → `benchmark_end_time`) — the measured benchmark loop only. Its span equals `summary.duration_seconds` and excludes warmup, preload, and index creation.
+> - **Total run window** (`run_start_time` → `run_end_time`) — the full run: connect, preload, index build, warmup, the measured benchmark, and post-run stat capture.
+>
+> The legacy `timestamp` field is retained for backward compatibility and equals `run_end_time` (the run **completion** time). All four fields are stored in the MongoDB document and JSON file, and are surfaced in the console summary, CSV, single-run HTML report, and comparison report. All timestamps are UTC.
+
 ### Console summary
 
 ```
-✅ Benchmark Complete
+Benchmark Complete
    Run ID           : a3b8c73c-11a4-4337-9e4d-7b0187565506
    Duration         : 300.00s
+   Benchmark Window : 2026-06-04 17:29:28 → 18:29:28 UTC
+   Run Window       : 2026-06-04 17:24:28 → 18:29:32 UTC
    Total Ops        : 150420
    Errors           : 0
    Throughput       : 501 ops/sec
    Key Distribution : zipfian
 
-   Operation           Count   Errors  Mean ms  p50 ms  p99 ms  p999 ms  p9999 ms  p99999 ms
-   read                75210        0    98.32   87.55  310.40   892.10   1420.33    2048.00
-   update              75210        0   102.14   91.20  320.18   910.22   1450.00    2100.00
+Operation           Count   Errors  Mean ms  p50 ms  p99 ms  p999 ms  p9999 ms  p99999 ms
+read                75210        0    98.32   87.55  310.40   892.10   1420.33    2048.00
+update              75210        0   102.14   91.20  320.18   910.22   1450.00    2100.00
 
-   Avg CPU  : 12.4%
-   Peak Mem : 8420 MB
+Avg CPU  : 12.4%
+Peak Mem : 8420 MB
 
-   Server Opcounters (delta during benchmark):
-                 insert=0  query=75210  update=75210  delete=0
+Server Opcounters (delta during benchmark):
+insert=0  query=75210  update=75210  delete=0
 ```
+
+The benchmark window spans the measured loop only (its length equals `Duration`), while the run window includes warmup and preload — so the gap between them is exactly the non-measured setup time.
 
 ### MongoDB document
 
-Full `RunResult` document stored in `ycsb_results.runs` containing all metrics, delta time-series, system samples, and server opcounters.
+Full `RunResult` document stored in `ycsb_results.runs` containing all metrics, delta time-series, system samples, server opcounters, and the four timing fields (`run_start_time`, `run_end_time`, `benchmark_start_time`, `benchmark_end_time`).
 
 ### JSON file
 
@@ -622,17 +632,18 @@ Full `RunResult` document stored in `ycsb_results.runs` containing all metrics, 
 
 ### CSV file
 
-`./results/<run_id>.csv` — flat per-operation metrics, one row per operation type. Useful for importing into Excel or Google Sheets. **Cannot be used for comparison mode** — use JSON or MongoDB for that.
+`./results/<run_id>.csv` — flat per-operation metrics, one row per operation type. Each row also carries four UTC timing columns — `run_start_time`, `run_end_time`, `benchmark_start_time`, `benchmark_end_time` (RFC3339) — alongside the existing `timestamp` column, so both the measured window and the total run window are available in spreadsheets. Useful for importing into Excel or Google Sheets. Cannot be used for comparison mode — use JSON or MongoDB for that.
 
 ### HTML report
 
 `./reports/<run_id>.html` — self-contained interactive report with four Chart.js charts:
+
 - Throughput over time (ops/sec)
 - p99 latency over time (ms)
 - CPU usage (%)
 - Memory usage (MB)
 
----
+The single-run HTML report also includes a **Timing (UTC)** table showing the benchmark window and the total run window.
 
 ## Comparison Mode
 
@@ -651,11 +662,13 @@ mongo-ycsb compare --config config.yaml \
   --output both
 ```
 
-Console output shows side-by-side latency percentiles with delta percentages. HTML output generates `./reports/compare_<runA>_vs_<runB>.html` with overlaid Chart.js charts.
+Console output shows side-by-side latency percentiles with delta percentages, plus the UTC timestamp, benchmark window, and run window for both runs. The HTML comparison report shows the same timing rows in each run's card, with the timestamp explicitly labelled UTC.
 
-Runs are loaded from **MongoDB first**, falling back to **local JSON** automatically if MongoDB is unavailable or disabled. **CSV files cannot be used for comparison** — they contain summary metrics only, not the full RunResult needed for a diff.
+HTML output generates `./reports/compare_<runA>_vs_<runB>.html` with overlaid Chart.js charts.
 
----
+Runs are loaded from MongoDB first, falling back to local JSON automatically if MongoDB is unavailable or disabled.
+
+CSV files cannot be used for comparison — they contain summary metrics only, not the full `RunResult` needed for a diff.
 
 ## CRON Scheduling
 
@@ -665,7 +678,6 @@ Run benchmarks automatically on a schedule. Configure the trigger expression and
 schedule:
   enabled: true
   cron: "0 * * * *"              # trigger every hour
-
   bounds:
     type: "timeWindow"            # fires only within this window
     startAt: "2026-05-01T00:00:00Z"
@@ -679,25 +691,23 @@ mongo-ycsb schedule --config config.yaml --skip-preload
 The `dry-run` command shows a full schedule preview before you commit to running:
 
 ```
-   ⏰ CRON Schedule
-      Expression : "0 * * * *"
-      Bound Type : timeWindow
-      Start At   : 2026-05-01T00:00:00Z
-      Stop At    : 2026-05-03T00:00:00Z
+CRON Schedule
+   Expression : "0 * * * *"
+   Bound Type : timeWindow
+   Start At   : 2026-05-01T00:00:00Z
+   Stop At    : 2026-05-03T00:00:00Z
 
-      Next 5 trigger times:
-         1. 2026-04-24 19:00:00 UTC  ⏭️  (before window — will be skipped)
-         2. 2026-05-01 00:00:00 UTC  ✅
-         3. 2026-05-01 01:00:00 UTC  ✅
-         4. 2026-05-01 02:00:00 UTC  ✅
-         5. 2026-05-01 03:00:00 UTC  ✅
+Next 5 trigger times:
+   1. 2026-04-24 19:00:00 UTC    (before window — will be skipped)
+   2. 2026-05-01 00:00:00 UTC
+   3. 2026-05-01 01:00:00 UTC
+   4. 2026-05-01 02:00:00 UTC
+   5. 2026-05-01 03:00:00 UTC
 
-      📊 Estimated runs in window: 48
+Estimated runs in window: 48
 ```
 
 Each triggered run gets its own `run_id` and is stored independently, making it easy to track performance over time.
-
----
 
 ## Replicating Original YCSB Results
 
@@ -723,65 +733,61 @@ execution:
   keyZeroPadding: 0               # YCSB modern default
 ```
 
----
-
 ## Project Structure
 
 ```
 mongo-ycsb/
-├── main.go
-├── cmd/
-│   ├── root.go          # CLI root, config initialisation
-│   ├── run.go           # run command
-│   ├── dryrun.go        # dry-run command
-│   ├── compare.go       # compare command
-│   ├── schedule.go      # schedule command
-│   └── report.go        # report command
-├── internal/
-│   ├── config/
-│   │   ├── config.go    # full config schema
-│   │   └── validator.go # pre-flight validation
-│   ├── db/
-│   │   └── client.go    # benchmark + preload MongoDB clients
-│   ├── datagen/
-│   │   └── generator.go # document + key generation, all distributions
-│   ├── distribution/
-│   │   └── zipfian.go   # ScrambledZipfian + Latest distribution
-│   ├── workloads/
-│   │   └── workloads.go # standard workloads A–F + custom selector
-│   ├── loader/
-│   │   └── loader.go    # preload phase + index creation
-│   ├── worker/
-│   │   ├── worker.go    # individual operation executor
-│   │   └── pool.go      # goroutine pool + rate limiter
-│   ├── metrics/
-│   │   ├── metrics.go   # HDR histogram recorder
-│   │   ├── ticker.go    # live console ticker
-│   │   └── system.go    # CPU/memory sampler
-│   ├── models/
-│   │   └── run.go       # RunResult document schema
-│   ├── orchestrator/
-│   │   └── orchestrator.go  # coordinates all phases
-│   ├── reporter/
-│   │   ├── mongodb.go   # MongoDB result storage
-│   │   ├── local.go     # JSON + CSV file output
-│   │   └── html.go      # HTML report generation
-│   ├── comparer/
-│   │   ├── comparer.go  # run diff logic
-│   │   └── html.go      # HTML comparison report
-│   └── scheduler/
-│       └── scheduler.go # CRON scheduler with bounds
-└── configs/
-    ├── example.yaml     # fully annotated example config
-    └── zepto.yaml       # Zepto benchmark replication config
+  main.go
+  cmd/
+    root.go          # CLI root, config initialisation
+    run.go           # run command
+    dryrun.go        # dry-run command
+    compare.go       # compare command
+    schedule.go      # schedule command
+    report.go        # report command
+  internal/
+    config/
+      config.go      # full config schema
+      validator.go   # pre-flight validation
+    db/
+      client.go      # benchmark + preload MongoDB clients
+    datagen/
+      generator.go   # document + key generation, all distributions
+    distribution/
+      zipfian.go     # ScrambledZipfian + Latest distribution
+    workloads/
+      workloads.go   # standard workloads A–F + custom selector
+    loader/
+      loader.go      # preload phase + index creation
+    worker/
+      worker.go      # individual operation executor
+      pool.go        # goroutine pool + rate limiter
+    metrics/
+      metrics.go     # HDR histogram recorder
+      ticker.go      # live console ticker
+      system.go      # CPU/memory sampler
+    models/
+      run.go         # RunResult document schema
+    orchestrator/
+      orchestrator.go  # coordinates all phases
+    reporter/
+      mongodb.go     # MongoDB result storage
+      local.go       # JSON + CSV file output
+      html.go        # HTML report generation
+    comparer/
+      comparer.go    # run diff logic
+      html.go        # HTML comparison report
+    scheduler/
+      scheduler.go   # CRON scheduler with bounds
+  configs/
+    example.yaml     # fully annotated example config
+    zepto.yaml       # Zepto benchmark replication config
 ```
-
----
 
 ## Dependencies
 
 | Package | Version | Purpose |
-|---|---|---|
+| --- | --- | --- |
 | `go.mongodb.org/mongo-driver` | v1.17.9 | Official MongoDB Go driver |
 | `github.com/spf13/cobra` | v1.8.0 | CLI framework |
 | `github.com/spf13/viper` | v1.18.2 | YAML config + env var overrides |
