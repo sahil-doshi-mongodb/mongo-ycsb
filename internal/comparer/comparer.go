@@ -72,9 +72,21 @@ func (d *Diff) PrintConsole() {
 		"──────────────────────────────────────")
 	fmt.Printf("  %-20s  %-38s  %-38s\n", "Run ID",
 		truncate(a.RunID, 36), truncate(b.RunID, 36))
-	fmt.Printf("  %-20s  %-38s  %-38s\n", "Timestamp",
-		a.Timestamp.Format("2006-01-02 15:04:05"),
-		b.Timestamp.Format("2006-01-02 15:04:05"))
+	fmt.Printf("  %-20s  %-38s  %-38s\n", "Timestamp (UTC)",
+		a.Timestamp.UTC().Format("2006-01-02 15:04:05"),
+		b.Timestamp.UTC().Format("2006-01-02 15:04:05"))
+	fmt.Printf("  %-20s  %-38s  %-38s\n", "Bench Start (UTC)",
+		a.BenchmarkStartTime.UTC().Format("2006-01-02 15:04:05"),
+		b.BenchmarkStartTime.UTC().Format("2006-01-02 15:04:05"))
+	fmt.Printf("  %-20s  %-38s  %-38s\n", "Bench End (UTC)",
+		a.BenchmarkEndTime.UTC().Format("2006-01-02 15:04:05"),
+		b.BenchmarkEndTime.UTC().Format("2006-01-02 15:04:05"))
+	fmt.Printf("  %-20s  %-38s  %-38s\n", "Run Start (UTC)",
+		a.RunStartTime.UTC().Format("2006-01-02 15:04:05"),
+		b.RunStartTime.UTC().Format("2006-01-02 15:04:05"))
+	fmt.Printf("  %-20s  %-38s  %-38s\n", "Run End (UTC)",
+		a.RunEndTime.UTC().Format("2006-01-02 15:04:05"),
+		b.RunEndTime.UTC().Format("2006-01-02 15:04:05"))
 	fmt.Printf("  %-20s  %-38s  %-38s\n", "Workload",
 		a.Config.Workload, b.Config.Workload)
 	fmt.Printf("  %-20s  %-38d  %-38d\n", "Threads",

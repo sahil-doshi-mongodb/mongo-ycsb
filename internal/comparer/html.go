@@ -56,6 +56,10 @@ type compareData struct {
 type runMeta struct {
 	RunID         string
 	Timestamp     string
+	BenchStart    string
+	BenchEnd      string
+	RunStart      string
+	RunEnd        string
 	Workload      string
 	Threads       int
 	Tags          string
@@ -158,7 +162,11 @@ func (d *Diff) buildCompareData() (*compareData, error) {
 	return &compareData{
 		RunA: runMeta{
 			RunID:         d.RunA.RunID,
-			Timestamp:     d.RunA.Timestamp.Format("2006-01-02 15:04:05"),
+			Timestamp:     d.RunA.Timestamp.UTC().Format("2006-01-02 15:04:05 UTC"),
+			BenchStart:    d.RunA.BenchmarkStartTime.UTC().Format("2006-01-02 15:04:05 UTC"),
+			BenchEnd:      d.RunA.BenchmarkEndTime.UTC().Format("2006-01-02 15:04:05 UTC"),
+			RunStart:      d.RunA.RunStartTime.UTC().Format("2006-01-02 15:04:05 UTC"),
+			RunEnd:        d.RunA.RunEndTime.UTC().Format("2006-01-02 15:04:05 UTC"),
 			Workload:      d.RunA.Config.Workload,
 			Threads:       d.RunA.Config.Threads,
 			Tags:          joinTags(d.RunA.Tags),
@@ -171,7 +179,11 @@ func (d *Diff) buildCompareData() (*compareData, error) {
 		},
 		RunB: runMeta{
 			RunID:         d.RunB.RunID,
-			Timestamp:     d.RunB.Timestamp.Format("2006-01-02 15:04:05"),
+			Timestamp:     d.RunB.Timestamp.UTC().Format("2006-01-02 15:04:05 UTC"),
+			BenchStart:    d.RunB.BenchmarkStartTime.UTC().Format("2006-01-02 15:04:05 UTC"),
+			BenchEnd:      d.RunB.BenchmarkEndTime.UTC().Format("2006-01-02 15:04:05 UTC"),
+			RunStart:      d.RunB.RunStartTime.UTC().Format("2006-01-02 15:04:05 UTC"),
+			RunEnd:        d.RunB.RunEndTime.UTC().Format("2006-01-02 15:04:05 UTC"),
 			Workload:      d.RunB.Config.Workload,
 			Threads:       d.RunB.Config.Threads,
 			Tags:          joinTags(d.RunB.Tags),
@@ -247,6 +259,10 @@ const compareTemplate = `<!DOCTYPE html>
     <h2>🟢 Run A</h2>
     <div class="metric"><span>Run ID</span><span class="val" style="font-size:0.75rem">{{.RunA.RunID}}</span></div>
     <div class="metric"><span>Timestamp</span><span class="val">{{.RunA.Timestamp}}</span></div>
+    <div class="metric"><span>Benchmark Start</span><span class="val">{{.RunA.BenchStart}}</span></div>
+    <div class="metric"><span>Benchmark End</span><span class="val">{{.RunA.BenchEnd}}</span></div>
+    <div class="metric"><span>Run Start</span><span class="val">{{.RunA.RunStart}}</span></div>
+    <div class="metric"><span>Run End</span><span class="val">{{.RunA.RunEnd}}</span></div>
     <div class="metric"><span>Workload</span><span class="val">{{.RunA.Workload}}</span></div>
     <div class="metric"><span>Threads</span><span class="val">{{.RunA.Threads}}</span></div>
     <div class="metric"><span>Tags</span><span class="val">{{.RunA.Tags}}</span></div>
@@ -261,6 +277,10 @@ const compareTemplate = `<!DOCTYPE html>
     <h2>🟠 Run B</h2>
     <div class="metric"><span>Run ID</span><span class="val" style="font-size:0.75rem">{{.RunB.RunID}}</span></div>
     <div class="metric"><span>Timestamp</span><span class="val">{{.RunB.Timestamp}}</span></div>
+    <div class="metric"><span>Benchmark Start</span><span class="val">{{.RunB.BenchStart}}</span></div>
+    <div class="metric"><span>Benchmark End</span><span class="val">{{.RunB.BenchEnd}}</span></div>
+    <div class="metric"><span>Run Start</span><span class="val">{{.RunB.RunStart}}</span></div>
+    <div class="metric"><span>Run End</span><span class="val">{{.RunB.RunEnd}}</span></div>
     <div class="metric"><span>Workload</span><span class="val">{{.RunB.Workload}}</span></div>
     <div class="metric"><span>Threads</span><span class="val">{{.RunB.Threads}}</span></div>
     <div class="metric"><span>Tags</span><span class="val">{{.RunB.Tags}}</span></div>

@@ -42,6 +42,7 @@ func New(cfg *config.Config, log *zap.Logger, skipPreload bool) *Orchestrator {
 func (o *Orchestrator) Run(ctx context.Context) (*models.RunResult, error) {
 	fmt.Printf("\n🔑 Run ID : %s\n\n", o.runID)
 	o.log.Info("benchmark starting", zap.String("run_id", o.runID))
+	runStart := time.Now().UTC()
 
 	// ── 1. Benchmark client ──────────────────────────────────────────────────
 	fmt.Printf("🔌 Pre-warming %d benchmark connections...\n", o.cfg.Execution.Threads)
@@ -191,7 +192,7 @@ func (o *Orchestrator) Run(ctx context.Context) (*models.RunResult, error) {
 		fmt.Printf("   Target: %d ops/sec\n", o.cfg.Execution.TargetOpsPerSec)
 	}
 
-	start := time.Now()
+	benchStart := time.Now().UTC()
 	pool := worker.NewPool(
 		&o.cfg.Execution,
 		&o.cfg.Workload,
@@ -206,8 +207,8 @@ func (o *Orchestrator) Run(ctx context.Context) (*models.RunResult, error) {
 		sampler.Stop()
 		return nil, fmt.Errorf("benchmark failed: %w", err)
 	}
-	elapsed := time.Since(start)
-
+	benchEnd := time.Now().UTC()
+	elapsed := benchEnd.Sub(benchStart)
 	ticker.Stop()
 	sampler.Stop()
 
@@ -271,15 +272,19 @@ func (o *Orchestrator) Run(ctx context.Context) (*models.RunResult, error) {
 	}
 
 	result := &models.RunResult{
-		RunID:         o.runID,
-		Timestamp:     time.Now().UTC(),
-		Tags:          o.cfg.Results.Tags,
-		Config:        models.FromConfig(o.cfg),
-		ClusterInfo:   clusterInfo,
-		Delta:         modelDeltas,
-		SystemSamples: modelSysSamples,
-		ServerStats:   serverStats,
-		ErrorSamples:  errorSamples,
+		RunID:              o.runID,
+		Timestamp:          time.Now().UTC(),
+		RunStartTime:       runStart,
+		RunEndTime:         time.Now().UTC(),
+		BenchmarkStartTime: benchStart,
+		BenchmarkEndTime:   benchEnd,
+		Tags:               o.cfg.Results.Tags,
+		Config:             models.FromConfig(o.cfg),
+		ClusterInfo:        clusterInfo,
+		Delta:              modelDeltas,
+		SystemSamples:      modelSysSamples,
+		ServerStats:        serverStats,
+		ErrorSamples:       errorSamples,
 		Summary: models.RunSummary{
 			DurationSeconds: elapsed.Seconds(),
 			TotalOps:        snap.TotalOps,
@@ -410,6 +415,12 @@ func printSummary(r *models.RunResult) {
 	fmt.Printf("✅ Benchmark Complete\n")
 	fmt.Printf("   Run ID           : %s\n", r.RunID)
 	fmt.Printf("   Duration         : %.2fs\n", r.Summary.DurationSeconds)
+	fmt.Printf("   Benchmark Window : %s → %s UTC\n",
+		r.BenchmarkStartTime.UTC().Format("2006-01-02 15:04:05"),
+		r.BenchmarkEndTime.UTC().Format("15:04:05"))
+	fmt.Printf("   Run Window       : %s → %s UTC\n",
+		r.RunStartTime.UTC().Format("2006-01-02 15:04:05"),
+		r.RunEndTime.UTC().Format("15:04:05"))
 	fmt.Printf("   Total Ops        : %d\n", r.Summary.TotalOps)
 	fmt.Printf("   Errors           : %d\n", r.Summary.TotalErrors)
 	fmt.Printf("   Throughput       : %.0f ops/sec\n", r.Summary.OpsPerSec)

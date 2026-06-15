@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"time"
 
 	"github.com/sahil-doshi-mongodb/mongo-ycsb/internal/config"
 	"github.com/sahil-doshi-mongodb/mongo-ycsb/internal/models"
@@ -79,7 +80,10 @@ func (r *LocalReporter) saveCSV(result *models.RunResult) error {
 
 	// Header
 	_ = w.Write([]string{
-		"run_id", "timestamp", "workload", "mode", "threads",
+		"run_id", "timestamp",
+		"run_start_time", "run_end_time",
+		"benchmark_start_time", "benchmark_end_time",
+		"workload", "mode", "threads",
 		"duration_seconds", "total_ops", "total_errors", "ops_per_sec",
 		"operation", "count", "errors", "mean_ms",
 		"p50_ms", "p95_ms", "p99_ms", "p999_ms",
@@ -90,6 +94,10 @@ func (r *LocalReporter) saveCSV(result *models.RunResult) error {
 		_ = w.Write([]string{
 			result.RunID,
 			result.Timestamp.Format("2006-01-02T15:04:05Z"),
+			result.RunStartTime.UTC().Format(time.RFC3339),
+			result.RunEndTime.UTC().Format(time.RFC3339),
+			result.BenchmarkStartTime.UTC().Format(time.RFC3339),
+			result.BenchmarkEndTime.UTC().Format(time.RFC3339),
 			result.Config.Workload,
 			result.Config.Mode,
 			strconv.Itoa(result.Config.Threads),

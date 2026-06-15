@@ -8,16 +8,24 @@ import (
 
 // RunResult is the top-level document stored per benchmark run.
 type RunResult struct {
-	RunID         string         `bson:"run_id"         json:"run_id"`
-	Timestamp     time.Time      `bson:"timestamp"      json:"timestamp"`
-	Tags          []string       `bson:"tags"           json:"tags"`
-	Config        RunConfig      `bson:"config"         json:"config"`
-	ClusterInfo   *ClusterInfo   `bson:"cluster_info,omitempty" json:"cluster_info,omitempty"`
-	Summary       RunSummary     `bson:"summary"        json:"summary"`
-	Delta         []DeltaPoint   `bson:"delta"          json:"delta"`
-	SystemSamples []SystemSample `bson:"system_samples" json:"system_samples"`
-	ServerStats   *ServerStats   `bson:"server_stats,omitempty" json:"server_stats,omitempty"`
-	ErrorSamples  []ErrorSample  `bson:"error_samples,omitempty" json:"error_samples,omitempty"`
+	RunID     string    `bson:"run_id"    json:"run_id"`
+	Timestamp time.Time `bson:"timestamp" json:"timestamp"` // legacy: == RunEndTime
+	// Total-run window — spans connect, preload, index build, warmup,
+	// the measured benchmark, and post-run stat capture.
+	RunStartTime time.Time `bson:"run_start_time" json:"run_start_time"`
+	RunEndTime   time.Time `bson:"run_end_time"   json:"run_end_time"`
+	// Measured benchmark window only — excludes warmup/preload.
+	// BenchmarkEndTime - BenchmarkStartTime corresponds to Summary.DurationSeconds.
+	BenchmarkStartTime time.Time      `bson:"benchmark_start_time" json:"benchmark_start_time"`
+	BenchmarkEndTime   time.Time      `bson:"benchmark_end_time"   json:"benchmark_end_time"`
+	Tags               []string       `bson:"tags"           json:"tags"`
+	Config             RunConfig      `bson:"config"         json:"config"`
+	ClusterInfo        *ClusterInfo   `bson:"cluster_info,omitempty" json:"cluster_info,omitempty"`
+	Summary            RunSummary     `bson:"summary"        json:"summary"`
+	Delta              []DeltaPoint   `bson:"delta"          json:"delta"`
+	SystemSamples      []SystemSample `bson:"system_samples" json:"system_samples"`
+	ServerStats        *ServerStats   `bson:"server_stats,omitempty" json:"server_stats,omitempty"`
+	ErrorSamples       []ErrorSample  `bson:"error_samples,omitempty" json:"error_samples,omitempty"`
 }
 
 // RunConfig is a snapshot of the config used for this run.
