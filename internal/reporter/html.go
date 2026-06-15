@@ -60,6 +60,10 @@ func (r *HTMLReporter) Save(result *models.RunResult) error {
 type templateData struct {
 	RunID           string
 	Timestamp       string
+	BenchStart      string
+	BenchEnd        string
+	RunStart        string
+	RunEnd          string
 	Workload        string
 	Mode            string
 	Threads         int
@@ -178,7 +182,11 @@ func buildTemplateData(r *models.RunResult) (*templateData, error) {
 
 	return &templateData{
 		RunID:           r.RunID,
-		Timestamp:       r.Timestamp.Format("2006-01-02 15:04:05 UTC"),
+		Timestamp:       r.Timestamp.UTC().Format("2006-01-02 15:04:05 UTC"),
+		BenchStart:      r.BenchmarkStartTime.UTC().Format("2006-01-02 15:04:05 UTC"),
+		BenchEnd:        r.BenchmarkEndTime.UTC().Format("2006-01-02 15:04:05 UTC"),
+		RunStart:        r.RunStartTime.UTC().Format("2006-01-02 15:04:05 UTC"),
+		RunEnd:          r.RunEndTime.UTC().Format("2006-01-02 15:04:05 UTC"),
 		Workload:        r.Config.Workload,
 		Mode:            r.Config.Mode,
 		Threads:         r.Config.Threads,
@@ -277,14 +285,36 @@ const htmlTemplate = `<!DOCTYPE html>
     <div class="label">Errors</div>
     <div class="value">{{.TotalErrors}}</div>
   </div>
-  <div class="card">
-  <h3>Cluster Info</h3>
-  <table style="width:100%;border-collapse:collapse;">
-    <tr><td style="padding:4px 8px;color:#666;">MongoDB Version</td><td style="padding:4px 8px;font-weight:bold;">{{.MongoVersion}}</td></tr>
-    <tr><td style="padding:4px 8px;color:#666;">Host</td><td style="padding:4px 8px;">{{.Host}}</td></tr>
-    <tr><td style="padding:4px 8px;color:#666;">Storage Engine</td><td style="padding:4px 8px;">{{.StorageEngine}}</td></tr>
-  </table>
+ <div class="card">
+ <h3>Cluster Info</h3>
+ <table style="width:100%;border-collapse:collapse;">
+ <tr><td style="padding:4px 8px;color:#666;">MongoDB Version</td><td style="padding:4px 8px;font-weight:bold;">{{.MongoVersion}}</td></tr>
+ <tr><td style="padding:4px 8px;color:#666;">Host</td><td style="padding:4px 8px;">{{.Host}}</td></tr>
+ <tr><td style="padding:4px 8px;color:#666;">Storage Engine</td><td style="padding:4px 8px;">{{.StorageEngine}}</td></tr>
+ </table>
 </div>
+</div>
+
+<!-- Timing -->
+<div class="section">
+ <h2>Timing (UTC)</h2>
+ <table>
+ <thead>
+ <tr><th>Window</th><th>Start</th><th>End</th></tr>
+ </thead>
+ <tbody>
+ <tr>
+ <td>Benchmark (measured — matches Duration)</td>
+ <td>{{.BenchStart}}</td>
+ <td>{{.BenchEnd}}</td>
+ </tr>
+ <tr>
+ <td>Total Run (incl. warmup / preload)</td>
+ <td>{{.RunStart}}</td>
+ <td>{{.RunEnd}}</td>
+ </tr>
+ </tbody>
+ </table>
 </div>
 
 <!-- Operation metrics table -->
