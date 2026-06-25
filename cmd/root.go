@@ -42,6 +42,7 @@ func init() {
 	rootCmd.AddCommand(compareCmd)
 	rootCmd.AddCommand(reportCmd)
 	rootCmd.AddCommand(scheduleCmd)
+	rootCmd.AddCommand(exploreCmd)
 }
 
 // initConfig is called by PersistentPreRunE — flags are guaranteed to be
@@ -68,6 +69,27 @@ func initConfig() error {
 		)
 	}
 
+	fmt.Println("📄 Using config:", viper.ConfigFileUsed())
+	return nil
+}
+
+// initConfigOptional loads config like initConfig but never fails when no
+// config file is present. Used by commands (e.g. explore) that can run purely
+// from flags.
+func initConfigOptional() error {
+	if cfgFile != "" {
+		viper.SetConfigFile(cfgFile)
+	} else {
+		viper.AddConfigPath("./configs")
+		viper.SetConfigName("default")
+		viper.SetConfigType("yaml")
+	}
+	viper.SetEnvPrefix("MONGOYCSB")
+	viper.AutomaticEnv()
+	if err := viper.ReadInConfig(); err != nil {
+		// Config is optional here — flags can supply everything.
+		return nil
+	}
 	fmt.Println("📄 Using config:", viper.ConfigFileUsed())
 	return nil
 }

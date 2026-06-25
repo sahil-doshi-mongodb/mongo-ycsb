@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>mongo-ycsb explore</title>
+    <link rel="stylesheet" href="/styles.css" />
+</head>
+
+<body>
+    <header class="topbar">
+        <div class="brand">
+            <span class="leaf">🍃</span>
+            <h1>mongo-ycsb <span class="muted">explore</span></h1>
+        </div>
+        <div class="conn" id="conn"></div>
+    </header>
+
+    <main>
+        <section class="panel" id="picker-panel">
+            <div class="panel-head">
+                <h2>Runs</h2>
+                <div class="controls">
+                    <input type="search" id="search" placeholder="Filter by run id, tag, workload…" />
+                    <select id="workload-filter">
+                        <option value="">All workloads</option>
+                    </select>
+                    <span class="selcount" id="selcount">0 / 5 selected</span>
+                    <button id="clear-sel" class="btn ghost">Clear</button>
+                </div>
+            </div>
+            <div class="table-wrap">
+                <table id="runs-table">
+                    <thead>
+                        <tr>
+                            <th></th>
+                            <th data-sort="timestamp">Timestamp (UTC)</th>
+                            <th data-sort="run_id">Run ID</th>
+                            <th data-sort="workload">Workload</th>
+                            <th data-sort="threads">Threads</th>
+                            <th data-sort="ops_per_sec">Throughput</th>
+                            <th data-sort="total_ops">Total Ops</th>
+                            <th data-sort="total_errors">Errors</th>
+                            <th data-sort="mongo_version">Mongo</th>
+                            <th>Tags</th>
+                        </tr>
+                    </thead>
+                    <tbody id="runs-body"></tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="panel" id="compare-panel" hidden>
+            <div class="panel-head">
+                <h2>Comparison</h2>
+                <div class="controls">
+                    <span class="legend muted">Lower-is-better metrics: <span class="chip best">best</span> <span
+                            class="chip worst">worst</span></span>
+                    <button id="export-pdf" class="btn">Export PDF</button>
+                    <button id="export-excel" class="btn">Export Excel</button>
+                </div>
+            </div>
+            <div id="compare-content"></div>
+        </section>
+    </main>
+
+    <div id="toast" class="toast" hidden></div>
+
+    <script src="/vendor/chart.umd.js"></script>
+    <script src="/vendor/html2canvas.min.js"></script>
+    <script src="/vendor/jspdf.umd.min.js"></script>
+    <script src="/app.js"></script>
+</body>
+
+</html>
