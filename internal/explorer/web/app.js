@@ -328,22 +328,8 @@ function headRow(runs) {
 }
 
 function metricRow(label, values, lowerBetter, fmt) {
-    const cls = (lowerBetter === null) ? values.map(() => '') : highlight(values, lowerBetter);
-    const cells = values.map((v, i) => `<td class="${cls[i]}">${v == null ? '—' : fmt(v)}</td>`).join('');
+    const cells = values.map(v => `<td>${v == null ? '—' : fmt(v)}</td>`).join('');
     return `<tr><td class="rowlabel">${label}</td>${cells}</tr>`;
-}
-
-function highlight(values, lowerBetter) {
-    const nums = values.map(v => (typeof v === 'number' && isFinite(v)) ? v : null);
-    const valid = nums.filter(v => v !== null);
-    if (valid.length < 2) return nums.map(() => '');
-    const min = Math.min(...valid), max = Math.max(...valid);
-    if (min === max) return nums.map(() => '');
-    return nums.map(v => {
-        if (v === null) return '';
-        if (lowerBetter) return v === min ? 'best' : (v === max ? 'worst' : '');
-        return v === max ? 'best' : (v === min ? 'worst' : '');
-    });
 }
 
 function unionOps(runs) {

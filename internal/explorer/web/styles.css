@@ -236,38 +236,6 @@ table.cmp th.rowlabel {
     white-space: nowrap;
 }
 
-td.best {
-    background: var(--green-bg);
-    color: var(--green);
-    font-weight: 600;
-}
-
-td.worst {
-    background: var(--red-bg);
-    color: var(--red);
-    font-weight: 600;
-}
-
-.chip {
-    padding: 1px 7px;
-    border-radius: 5px;
-    font-size: 11px;
-}
-
-.chip.best {
-    background: var(--green-bg);
-    color: var(--green);
-}
-
-.chip.worst {
-    background: var(--red-bg);
-    color: var(--red);
-}
-
-.legend {
-    font-size: 12px;
-}
-
 .charts {
     display: grid;
     grid-template-columns: 1fr 1fr;
